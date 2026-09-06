@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block titulo %}Configuración{% endblock %}
+
+{% block contenido %}
+<header>
+  <h1>Configuración</h1>
+  <p>Datos que salen en el certificado y servidor de correo para enviarlo.</p>
+</header>
+
+<form method="post" action="{{ url_for('admin.guardar_configuracion') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="tarjeta">
+    <h2>Datos del certificado</h2>
+    <div class="campos">
+      <div><label for="org_nombre">Empresa</label><input id="org_nombre" name="org_nombre" value="{{ cfg.org_nombre }}"></div>
+      <div><label for="org_area">Área que certifica</label><input id="org_area" name="org_area" value="{{ cfg.org_area }}"></div>
+      <div><label for="org_firmante">Nombre de quien firma</label><input id="org_firmante" name="org_firmante" value="{{ cfg.org_firmante }}"></div>
+      <div><label for="org_cargo_firmante">Cargo de quien firma</label><input id="org_cargo_firmante" name="org_cargo_firmante" value="{{ cfg.org_cargo_firmante }}"></div>
+    </div>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Correo</h2>
+    <p class="ayuda">Cada certificado emitido se envía al estudiante con copia al correo del administrador. Si dejas el servidor SMTP vacío, los mensajes se guardan como archivos .eml en <code>{{ bandeja }}</code>.</p>
+    <div class="campos">
+      <div><label for="correo_administrador">Correo del administrador (copia)</label>
+        <input id="correo_administrador" name="correo_administrador" type="email" value="{{ cfg.correo_administrador }}"></div>
+      <div><label for="smtp_remitente">Remitente</label>
+        <input id="smtp_remitente" name="smtp_remitente" type="email" value="{{ cfg.smtp_remitente }}"></div>
+      <div><label for="smtp_host">Servidor SMTP</label>
+        <input id="smtp_host" name="smtp_host" value="{{ cfg.smtp_host }}" placeholder="smtp.office365.com"></div>
+      <div><label for="smtp_puerto">Puerto</label>
+        <input id="smtp_puerto" name="smtp_puerto" type="number" value="{{ cfg.smtp_puerto }}"></div>
+      <div><label for="smtp_usuario">Usuario SMTP</label>
+        <input id="smtp_usuario" name="smtp_usuario" value="{{ cfg.smtp_usuario }}"></div>
+      <div><label for="smtp_password">Contraseña SMTP</label>
+        <input id="smtp_password" name="smtp_password" type="password" placeholder="{{ '••••••••  (guardada)' if cfg.smtp_password else 'Sin configurar' }}"></div>
+      <div>
+        <label class="opcion" style="display:flex;gap:8px;align-items:center;margin-top:22px">
+          <input type="checkbox" name="smtp_tls" value="1" {{ 'checked' if cfg.smtp_tls == '1' }}> <span>Usar STARTTLS</span>
+        </label>
+      </div>
+    </div>
+    <div class="fila-acciones" style="margin-top:16px">
+      <button class="boton" type="submit">Guardar configuración</button>
+    </div>
+  </div>
+</form>
+
+<div class="tarjeta">
+  <h2>Probar el envío</h2>
+  <form method="post" action="{{ url_for('admin.probar_correo') }}" class="campos">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label for="destino">Enviar prueba a</label>
+      <input id="destino" name="destino" type="email" value="{{ cfg.correo_administrador }}"></div>
+    <div><button class="boton secundario" type="submit">Enviar prueba</button></div>
+  </form>
+</div>
+
+<div class="tarjeta">
+  <h2>Últimos correos</h2>
+  {% if correos %}
+    <div class="tabla-envoltura">
+      <table>
+        <thead><tr><th>Fecha</th><th>Destinatario</th><th>Asunto</th><th>Estado</th><th>Detalle</th></tr></thead>
+        <tbody>
+          {% for c in correos %}
+            <tr class="{{ 'pendiente' if c.estado == 'error' }}">
+              <td>{{ c.creado_en | fecha_hora }}</td>
+              <td>{{ c.destinatario }}</td>
+              <td>{{ c.asunto }}</td>
+              <td>
+                {% if c.estado == 'enviado' %}<span class="etiqueta aprobado">Enviado</span>
+                {% elif c.estado == 'error' %}<span class="etiqueta reprobado">Error</span>
+                {% else %}<span class="etiqueta neutra">Bandeja local</span>{% endif %}
+              </td>
+              <td style="color:var(--tinta-suave);font-size:.85rem">{{ c.detalle }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">Todavía no se ha enviado ningún correo.</p>
+  {% endif %}
+</div>
+{% endblock %}

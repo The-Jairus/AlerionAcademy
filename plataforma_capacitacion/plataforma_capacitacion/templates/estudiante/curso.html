@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block titulo %}{{ a.titulo }}{% endblock %}
+
+{% block contenido %}
+<header>
+  <p><a href="{{ url_for('estudiante.panel') }}">← Mis cursos</a></p>
+  <h1>{{ a.titulo }}</h1>
+  {% if a.descripcion %}<p>{{ a.descripcion }}</p>{% endif %}
+</header>
+
+<div class="tarjeta">
+  {% if a.tipo_material == 'video' %}
+    <div class="visor">
+      <video id="material" preload="metadata" controls controlsList="nodownload noplaybackrate"
+             disablepictureinpicture oncontextmenu="return false"
+             src="{{ url_for('estudiante.video', asignacion_id=a.id) }}"></video>
+      <p class="aviso-visor">El video debe verse en orden. Si adelantas, la barra vuelve al punto que ya habías alcanzado.</p>
+    </div>
+  {% else %}
+    <div class="visor">
+      <div class="pagina-imagen">
+        <img id="pagina" alt="Página del material" oncontextmenu="return false"
+             src="{{ url_for('estudiante.pagina', asignacion_id=a.id, numero=1) }}">
+      </div>
+      <div class="visor-controles">
+        <button type="button" id="anterior">← Anterior</button>
+        <span id="indicador">Página 1 de {{ a.paginas }}</span>
+        <button type="button" id="siguiente">Siguiente →</button>
+      </div>
+      <p class="aviso-visor" id="mensaje-visor">Lee cada página unos segundos antes de pasar a la siguiente.</p>
+    </div>
+  {% endif %}
+
+  <div style="margin-top:18px">
+    <div class="progreso {{ 'parcial' if a.avance < 100 }}"><i id="barra" style="width: {{ a.avance }}%"></i></div>
+    <p class="meta" style="color:var(--tinta-suave);font-size:.88rem;margin:8px 0 0">
+      Avance registrado: <span id="porcentaje">{{ a.avance | round(0, 'floor') | int }}</span>%
+      {% if a.tipo_material == 'video' %}
+        · se habilita el examen al llegar al {{ minimo_video | int }}%
+      {% else %}
+        · se habilita el examen al llegar a la última página
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="tarjeta" id="bloque-examen">
+  <h2>{{ a.quiz_titulo or 'Examen del curso' }}</h2>
+
+  {% if a.estado == 'aprobado' %}
+    <p>Aprobaste este curso{% if a.completado_en %} el {{ a.completado_en | fecha }}{% endif %}.
+      El certificado se envió a <strong>{{ usuario.email }}</strong>.</p>
+    {% if certificado %}
+      <a class="boton" href="{{ url_for('estudiante.descargar_certificado', codigo=certificado.codigo) }}">Descargar certificado</a>
+    {% endif %}
+  {% elif not a.quiz_id %}
+    <p class="ayuda">Este curso todavía no tiene examen configurado. Cuando el administrador lo publique, podrás presentarlo desde aquí.</p>
+  {% else %}
+    <p class="ayuda">
+      {{ a.puntaje_minimo }} puntos sobre 100 para aprobar ·
+      {{ a.intentos_max - intentos_usados }} intento{{ 's' if (a.intentos_max - intentos_usados) != 1 }} disponible{{ 's' if (a.intentos_max - intentos_usados) != 1 }}
+    </p>
+    {% if intentos %}
+      <p class="ayuda">Último intento: {{ intentos[0].puntaje | round(0) | int }} puntos el {{ intentos[0].finalizado_en | fecha_hora }}.</p>
+    {% endif %}
+
+    {% if intentos_usados >= a.intentos_max %}
+      <p style="color:var(--rojo-tinta)">Agotaste los intentos. Pídele al administrador que reabra la capacitación.</p>
+    {% else %}
+      <a class="boton" id="ir-examen"
+         href="{{ url_for('estudiante.examen', asignacion_id=a.id) }}"
+         {% if not a.material_completo %}aria-disabled="true" style="pointer-events:none;background:#b3bfc6;border-color:#b3bfc6"{% endif %}>
+        Presentar el examen
+      </a>
+      <p id="candado" class="ayuda" style="margin:10px 0 0" {% if a.material_completo %}hidden{% endif %}>
+        Termina primero el contenido para habilitar el examen.
+      </p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.CURSO = {
+    urlAvance: "{{ url_for('estudiante.avance', asignacion_id=a.id) }}",
+    urlPagina: "{{ url_for('estudiante.pagina', asignacion_id=a.id, numero=0) }}",
+    csrf: "{{ csrf_token() }}",
+    tipo: "{{ a.tipo_material }}",
+    duracion: {{ a.duracion_segundos or 0 }},
+    paginas: {{ a.paginas or 0 }},
+    maxPosicion: {{ a.max_posicion or 0 }},
+    completo: {{ 'true' if a.material_completo else 'false' }},
+    segundosPagina: {{ segundos_pagina }}
+  };
+</script>
+<script src="{{ url_for('static', filename='js/visor.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block titulo %}Asignar cursos{% endblock %}
+
+{% block contenido %}
+<header>
+  <h1>Asignar cursos</h1>
+  <p>Selecciona uno o varios cursos y las personas que deben realizarlos.</p>
+</header>
+
+<div class="tarjeta">
+  <h2>Nueva asignación</h2>
+  {% if not cursos or not usuarios %}
+    <p class="vacio">Necesitas al menos un curso publicado y un usuario activo para poder asignar.</p>
+  {% else %}
+    <form method="post" action="{{ url_for('admin.crear_asignacion') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="rejilla dos">
+        <div>
+          <label for="curso_id">Cursos</label>
+          <select id="curso_id" name="curso_id" multiple required>
+            {% for c in cursos %}<option value="{{ c.id }}">{{ c.titulo }}</option>{% endfor %}
+          </select>
+        </div>
+        <div>
+          <label for="usuario_id">Personas</label>
+          <select id="usuario_id" name="usuario_id" multiple required>
+            {% for u in usuarios %}<option value="{{ u.id }}">{{ u.nombre }} · {{ u.email }}</option>{% endfor %}
+          </select>
+          <p class="ayuda" style="margin:6px 0 0">Mantén Ctrl (⌘ en Mac) para elegir varias.</p>
+        </div>
+      </div>
+      <div class="campos" style="margin-top:14px">
+        <div><label for="fecha_limite">Fecha límite (opcional)</label><input id="fecha_limite" name="fecha_limite" type="date"></div>
+        <div>
+          <label class="opcion" style="display:flex;gap:8px;align-items:center;margin-top:22px">
+            <input type="checkbox" name="notificar" value="1" checked> <span>Avisar por correo</span>
+          </label>
+        </div>
+        <div><button class="boton" type="submit">Asignar</button></div>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+<div class="tarjeta">
+  <h2>Asignaciones vigentes</h2>
+  {% if asignaciones %}
+    <div class="tabla-envoltura">
+      <table>
+        <thead>
+          <tr><th>Persona</th><th>Curso</th><th>Asignado</th><th>Vence</th><th class="numero">Avance</th><th>Estado</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for a in asignaciones %}
+            <tr class="{{ 'pendiente' if a.estado != 'aprobado' else 'aprobado' }}">
+              <td>{{ a.usuario }}<div style="color:var(--tinta-suave);font-size:.82rem">{{ a.email }}</div></td>
+              <td>{{ a.curso }}</td>
+              <td>{{ a.asignado_en | fecha }}</td>
+              <td>{{ a.fecha_limite | fecha }}</td>
+              <td class="numero">{{ a.avance | round(0) | int }}%</td>
+              <td><span class="etiqueta {{ a.estado }}">{{ estados[a.estado] }}</span></td>
+              <td>
+                <div class="fila-acciones">
+                  <form method="post" class="enlinea" action="{{ url_for('admin.reabrir_asignacion', asignacion_id=a.id) }}"
+                        onsubmit="return confirm('Se borra el avance y los intentos de esta persona en el curso. ¿Continuar?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="boton chico secundario" type="submit">Reabrir</button>
+                  </form>
+                  <form method="post" class="enlinea" action="{{ url_for('admin.eliminar_asignacion', asignacion_id=a.id) }}"
+                        onsubmit="return confirm('¿Retirar esta asignación?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="boton chico peligro" type="submit">Quitar</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">Aún no has asignado cursos.</p>
+  {% endif %}
+</div>
+{% endblock %}

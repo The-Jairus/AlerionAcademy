@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block titulo %}Certificados{% endblock %}
+
+{% block contenido %}
+<header>
+  <h1>Certificados</h1>
+  <p>Busca por persona o por curso para descargar o reenviar el PDF.</p>
+</header>
+
+<div class="tarjeta">
+  <form method="get" class="campos">
+    <div><label for="usuario">Persona</label>
+      <input id="usuario" name="usuario" type="search" value="{{ usuario }}" placeholder="Nombre, correo o documento"></div>
+    <div><label for="curso">Curso</label>
+      <input id="curso" name="curso" type="search" value="{{ curso }}" placeholder="Nombre del curso"></div>
+    <div class="fila-acciones">
+      <button class="boton" type="submit">Buscar</button>
+      <a class="boton secundario" href="{{ url_for('admin.certificados') }}">Limpiar</a>
+    </div>
+  </form>
+</div>
+
+<div class="tarjeta">
+  <h2>{{ certificados | length }} certificado{{ 's' if certificados | length != 1 }}</h2>
+  {% if certificados %}
+    <div class="tabla-envoltura">
+      <table>
+        <thead><tr><th>Código</th><th>Persona</th><th>Curso</th><th class="numero">Nota</th><th>Emitido</th><th></th></tr></thead>
+        <tbody>
+          {% for c in certificados %}
+            <tr>
+              <td><code>{{ c.codigo }}</code></td>
+              <td>{{ c.usuario }}<div style="color:var(--tinta-suave);font-size:.82rem">{{ c.documento or c.email }}</div></td>
+              <td>{{ c.curso }}</td>
+              <td class="numero">{{ c.puntaje | round(0) | int }}</td>
+              <td>{{ c.emitido_en | fecha }}</td>
+              <td>
+                <div class="fila-acciones">
+                  <a class="boton chico" href="{{ url_for('admin.ver_certificado', codigo=c.codigo) }}">Descargar PDF</a>
+                  <form method="post" class="enlinea" action="{{ url_for('admin.reenviar_certificado', codigo=c.codigo) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="boton chico secundario" type="submit">Reenviar por correo</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">No hay certificados que coincidan con la búsqueda.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+# Levanta la plataforma con HTTPS automático en tu dominio.
+#
+#   1. Apunta el dominio (registro A) a la IP del servidor.
+#   2. Cambia DOMINIO y CORREO abajo.
+#   3. docker compose up -d
+#
+# Caddy pide y renueva solo el certificado de Let's Encrypt: no hay que tocar nada más.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: "cambia-esto-por-una-cadena-larga-y-aleatoria"
+      DATA_DIR: /datos
+    volumes:
+      - datos:/datos
+    expose:
+      - "8000"
+
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: capacitacion.tuempresa.com
+      CORREO: soporte@tuempresa.com
+    volumes:
+      - ./despliegue/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  datos:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block titulo %}Panel{% endblock %}
+
+{% block contenido %}
+<header>
+  <h1>Panel de formación</h1>
+  <p>Estado general del programa de capacitación.</p>
+</header>
+
+<div class="rejilla cuatro" style="margin-bottom:20px">
+  <div class="cifra"><b>{{ resumen.total or 0 }}</b><span>Capacitaciones asignadas</span></div>
+  <div class="cifra bien"><b>{{ resumen.aprobados or 0 }}</b><span>Aprobadas</span></div>
+  <div class="cifra alerta"><b>{{ resumen.pendientes or 0 }}</b><span>Pendientes por ejecutar</span></div>
+  <div class="cifra"><b>{{ usuarios_activos }}</b><span>Usuarios activos · {{ cursos_activos }} cursos</span></div>
+</div>
+
+<div class="tarjeta">
+  <h2>Mis cursos pendientes</h2>
+  {% if mis_cursos %}
+    <div class="tabla-envoltura">
+      <table>
+        <thead><tr><th>Curso</th><th>Material</th><th>Avance</th><th>Fecha límite</th><th></th></tr></thead>
+        <tbody>
+          {% for c in mis_cursos %}
+            <tr class="pendiente">
+              <td>{{ c.titulo }}</td>
+              <td>{{ 'Video' if c.tipo_material == 'video' else 'Documento' }}</td>
+              <td class="numero">{{ c.avance | round(0) | int }}%</td>
+              <td>{{ c.fecha_limite | fecha }}</td>
+              <td><a class="boton chico" href="{{ url_for('estudiante.curso', asignacion_id=c.id) }}">Realizar</a></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">No tienes capacitaciones pendientes a tu nombre.</p>
+  {% endif %}
+</div>
+
+<div class="rejilla dos">
+  <div class="tarjeta">
+    <h2>Fuera de fecha</h2>
+    {% if vencidos %}
+      <div class="tabla-envoltura">
+        <table>
+          <thead><tr><th>Persona</th><th>Curso</th><th>Venció</th></tr></thead>
+          <tbody>
+            {% for v in vencidos[:8] %}
+              <tr class="pendiente">
+                <td>{{ v.usuario }}</td><td>{{ v.titulo }}</td><td>{{ v.fecha_limite | fecha }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if vencidos | length > 8 %}
+        <p class="ayuda" style="margin-top:12px">y {{ vencidos | length - 8 }} más en el resumen.</p>
+      {% endif %}
+    {% else %}
+      <p class="vacio">Nadie tiene capacitaciones vencidas.</p>
+    {% endif %}
+  </div>
+
+  <div class="tarjeta">
+    <h2>Últimos certificados emitidos</h2>
+    {% if ultimos %}
+      <div class="tabla-envoltura">
+        <table>
+          <thead><tr><th>Persona</th><th>Curso</th><th>Fecha</th><th></th></tr></thead>
+          <tbody>
+            {% for c in ultimos %}
+              <tr>
+                <td>{{ c.usuario }}</td><td>{{ c.titulo }}</td><td>{{ c.emitido_en | fecha }}</td>
+                <td><a class="boton chico secundario" href="{{ url_for('admin.ver_certificado', codigo=c.codigo) }}">PDF</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="vacio">Todavía no se ha emitido ningún certificado.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

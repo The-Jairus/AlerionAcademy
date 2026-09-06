@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block titulo %}Capacitación{% endblock %} · {{ ajustes.get('org_nombre', 'Capacitación') }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+<div class="disposicion">
+  <aside class="barra">
+    <div class="marca">
+      <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="1" y="1" width="24" height="24" rx="6" fill="#14664f"/>
+        <path d="M7 13.4l3.6 3.6L19 8.8" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div>
+        <strong>Capacitación</strong>
+        <span>{{ ajustes.get('org_nombre', '') }}</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      {% if usuario.rol == 'admin' %}
+        <a href="{{ url_for('admin.panel') }}" class="{{ 'activo' if request.endpoint == 'admin.panel' }}">Panel</a>
+        <a href="{{ url_for('estudiante.panel') }}" class="{{ 'activo' if request.endpoint in ['estudiante.panel', 'estudiante.curso'] }}">Mis cursos</a>
+        <hr>
+        <a href="{{ url_for('admin.usuarios') }}" class="{{ 'activo' if request.endpoint == 'admin.usuarios' }}">Usuarios</a>
+        <a href="{{ url_for('admin.cursos') }}" class="{{ 'activo' if request.endpoint == 'admin.cursos' }}">Cursos</a>
+        <a href="{{ url_for('admin.asignaciones') }}" class="{{ 'activo' if request.endpoint == 'admin.asignaciones' }}">Asignar cursos</a>
+        <a href="{{ url_for('admin.quices') }}" class="{{ 'activo' if request.endpoint in ['admin.quices', 'admin.editar_quiz'] }}">Exámenes</a>
+        <hr>
+        <a href="{{ url_for('admin.resumen') }}" class="{{ 'activo' if request.endpoint == 'admin.resumen' }}">Resumen de capacitaciones</a>
+        <a href="{{ url_for('admin.certificados') }}" class="{{ 'activo' if request.endpoint == 'admin.certificados' }}">Certificados</a>
+        <a href="{{ url_for('admin.configuracion') }}" class="{{ 'activo' if request.endpoint == 'admin.configuracion' }}">Configuración</a>
+      {% else %}
+        <a href="{{ url_for('estudiante.panel') }}" class="{{ 'activo' if request.endpoint in ['estudiante.panel', 'estudiante.curso', 'estudiante.examen'] }}">Mis cursos</a>
+      {% endif %}
+    </nav>
+
+    <div class="usuario-barra">
+      <strong>{{ usuario.nombre }}</strong>
+      <span class="correo">{{ usuario.email }}</span>
+      <form method="post" action="{{ url_for('auth.logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit">Cerrar sesión</button>
+      </form>
+    </div>
+  </aside>
+
+  <main class="contenido">
+    {% with mensajes = get_flashed_messages(with_categories=true) %}
+      {% if mensajes %}
+        <div class="avisos">
+          {% for categoria, texto in mensajes %}
+            <div class="aviso {{ categoria }}">{{ texto }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block contenido %}{% endblock %}
+  </main>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

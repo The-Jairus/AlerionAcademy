@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block titulo %}Cursos{% endblock %}
+
+{% block contenido %}
+<header>
+  <h1>Cursos</h1>
+  <p>Sube el material y la plataforma se encarga del resto: las presentaciones se convierten a páginas de solo lectura y los videos se miden para controlar el avance.</p>
+</header>
+
+<div class="tarjeta">
+  <h2>Crear curso</h2>
+  <form method="post" action="{{ url_for('admin.crear_curso') }}" enctype="multipart/form-data" id="form-curso">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="campos">
+      <div class="campo-completo"><label for="titulo">Título del curso</label><input id="titulo" name="titulo" required></div>
+      <div class="campo-completo"><label for="descripcion">Descripción</label><textarea id="descripcion" name="descripcion" placeholder="Qué aprende la persona y por qué es obligatorio"></textarea></div>
+      <div><label for="categoria">Categoría</label><input id="categoria" name="categoria" placeholder="Seguridad, Calidad, Inducción…"></div>
+      <div><label for="horas">Intensidad (horas)</label><input id="horas" name="horas" type="number" step="0.5" min="0.5" value="1"></div>
+      <div><label for="vigencia_meses">Vigencia del certificado (meses)</label><input id="vigencia_meses" name="vigencia_meses" type="number" min="0" value="12"></div>
+      <div class="campo-completo">
+        <label for="material">Material del curso</label>
+        <input id="material" name="material" type="file" required accept="{{ extensiones | join(',') }}">
+        <p class="ayuda" style="margin:6px 0 0">Formatos: {{ extensiones | join(', ') }}. Las presentaciones y PDF se muestran como imágenes página por página, así nadie puede editarlas ni descargarlas desde el visor.</p>
+      </div>
+      <div><button class="boton" type="submit" id="btn-crear">Crear curso</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="tarjeta">
+  <h2>{{ cursos | length }} curso{{ 's' if cursos | length != 1 }} en el sistema</h2>
+  {% if cursos %}
+    <div class="tabla-envoltura">
+      <table>
+        <thead>
+          <tr><th>Curso</th><th>Material</th><th>Examen</th><th class="numero">Asignados</th><th class="numero">Aprobados</th><th>Estado</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for c in cursos %}
+            <tr>
+              <td>
+                <strong>{{ c.titulo }}</strong>
+                {% if c.categoria %}<div class="meta" style="color:var(--tinta-suave);font-size:.84rem">{{ c.categoria }}</div>{% endif %}
+              </td>
+              <td>
+                {{ 'Video' if c.tipo_material == 'video' else 'Documento' }}
+                <div class="meta" style="color:var(--tinta-suave);font-size:.84rem">
+                  {{ c.duracion_segundos | duracion if c.tipo_material == 'video' else c.paginas ~ ' páginas' }}
+                </div>
+              </td>
+              <td>
+                {% if c.quiz_id %}
+                  <span class="etiqueta aprobado">{{ c.preguntas }} pregunta{{ 's' if c.preguntas != 1 }}</span>
+                {% else %}
+                  <span class="etiqueta pendiente">Sin examen</span>
+                {% endif %}
+              </td>
+              <td class="numero">{{ c.asignados }}</td>
+              <td class="numero">{{ c.aprobados }}</td>
+              <td>{% if c.activo %}<span class="etiqueta aprobado">Publicado</span>{% else %}<span class="etiqueta neutra">Oculto</span>{% endif %}</td>
+              <td>
+                <div class="fila-acciones">
+                  <a class="boton chico secundario" href="{{ url_for('admin.editar_quiz', curso_id=c.id) }}">Examen</a>
+                  <button class="boton chico secundario" type="button" onclick="document.getElementById('curso-{{ c.id }}').toggleAttribute('hidden')">Editar</button>
+                  <form method="post" class="enlinea" action="{{ url_for('admin.cambiar_estado_curso', curso_id=c.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="boton chico secundario" type="submit">{{ 'Ocultar' if c.activo else 'Publicar' }}</button>
+                  </form>
+                  <form method="post" class="enlinea" action="{{ url_for('admin.eliminar_curso', curso_id=c.id) }}"
+                        onsubmit="return confirm('Se elimina el curso, su material, sus asignaciones y sus certificados. ¿Continuar?')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="boton chico peligro" type="submit">Eliminar</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            <tr id="curso-{{ c.id }}" hidden>
+              <td colspan="7" style="background:var(--papel)">
+                <form method="post" action="{{ url_for('admin.editar_curso', curso_id=c.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <div class="campos">
+                    <div><label>Título</label><input name="titulo" value="{{ c.titulo }}"></div>
+                    <div><label>Categoría</label><input name="categoria" value="{{ c.categoria or '' }}"></div>
+                    <div><label>Horas</label><input name="horas" type="number" step="0.5" min="0.5" value="{{ c.horas }}"></div>
+                    <div><label>Vigencia (meses)</label><input name="vigencia_meses" type="number" min="0" value="{{ c.vigencia_meses }}"></div>
+                    <div class="campo-completo"><label>Descripción</label><textarea name="descripcion">{{ c.descripcion or '' }}</textarea></div>
+                    <div><button class="boton" type="submit">Guardar</button></div>
+                  </div>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="vacio">Todavía no hay cursos. Crea el primero con el formulario de arriba.</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('form-curso').addEventListener('submit', function () {
+    const b = document.getElementById('btn-crear');
+    b.disabled = true;
+    b.textContent = 'Procesando material…';
+  });
+</script>
+{% endblock %}
