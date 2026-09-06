@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Exam · {{ curso.titulo }}{% endblock %}
+
+{% block content %}
+<header>
+  <p><a href="{{ url_for('admin.quices') }}">← Exams</a></p>
+  <h1>{{ curso.titulo }}</h1>
+  <p>Set up the exam that unlocks once the person finishes the content.</p>
+</header>
+
+<div class="card">
+  <h2>Settings</h2>
+  <form method="post" action="{{ url_for('admin.guardar_quiz', curso_id=curso.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fields">
+      <div><label for="titulo">Exam title</label>
+        <input id="titulo" name="titulo" value="{{ quiz.titulo if quiz else curso.titulo ~ ' exam' }}"></div>
+      <div><label for="puntaje_minimo">Passing score</label>
+        <input id="puntaje_minimo" name="puntaje_minimo" type="number" min="1" max="100" value="{{ quiz.puntaje_minimo if quiz else 70 }}"></div>
+      <div><label for="intentos_max">Attempts allowed</label>
+        <input id="intentos_max" name="intentos_max" type="number" min="1" max="10" value="{{ quiz.intentos_max if quiz else 3 }}"></div>
+      <div><button class="btn gold" type="submit">{{ 'Save' if quiz else 'Create exam' }}</button></div>
+    </div>
+  </form>
+</div>
+
+{% if quiz %}
+  <div class="card">
+    <h2>Add question</h2>
+    <form method="post" action="{{ url_for('admin.agregar_pregunta', curso_id=curso.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="enunciado">Question</label>
+      <textarea id="enunciado" name="enunciado" required placeholder="What must be verified before the aircraft is towed?"></textarea>
+      <p class="hint" style="margin:14px 0 8px">Write the answer options and mark the correct one. Unused options can be left blank.</p>
+      {% for i in range(1, 5) %}
+        <div class="row" style="margin-bottom:8px">
+          <input type="radio" name="correcta" value="{{ i }}" {{ 'checked' if i == 1 }} aria-label="Correct option {{ i }}" style="width:auto;accent-color:var(--brand-gold)">
+          <input type="text" name="opcion{{ i }}" placeholder="Option {{ i }}" {{ 'required' if i <= 2 }} style="flex:1">
+        </div>
+      {% endfor %}
+      <button class="btn" type="submit">Add question</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>{{ preguntas | length }} question{{ 's' if preguntas | length != 1 }} in this exam</h2>
+    {% if preguntas %}
+      {% for p in preguntas %}
+        <div class="question">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <h3 style="margin:0">{{ loop.index }}. {{ p.fila.enunciado }}</h3>
+            <form method="post" action="{{ url_for('admin.eliminar_pregunta', pregunta_id=p.fila.id) }}"
+                  onsubmit="return confirm('Delete this question?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn small danger" type="submit">Delete</button>
+            </form>
+          </div>
+          <ul style="margin:10px 0 0;padding-left:18px">
+            {% for o in p.opciones %}
+              <li style="{{ 'color:var(--success);font-weight:600' if o.correcta else 'color:var(--ink-medium)' }}">
+                {{ o.texto }}{% if o.correcta %} · correct answer{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">This exam has no questions yet.</p>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="card"><p class="empty">Save the settings first to start adding questions.</p></div>
+{% endif %}
+{% endblock %}

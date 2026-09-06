@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}My training{% endblock %}
+
+{% block content %}
+<header>
+  <h1>My training</h1>
+  <p>
+    {% if pendientes %}
+      You have {{ pendientes }} course{{ 's' if pendientes != 1 }} left to complete.
+    {% else %}
+      You are up to date with all assigned training.
+    {% endif %}
+  </p>
+</header>
+
+{% if not asignaciones %}
+  <div class="card">
+    <h2>No courses assigned yet</h2>
+    <p class="hint">When the training department assigns a course, it will show up here and you will get an email.</p>
+  </div>
+{% else %}
+  <div class="grid two">
+    {% for a in asignaciones %}
+      {% set overdue = a.fecha_limite and a.fecha_limite < hoy and a.estado != 'aprobado' %}
+      <article class="course {{ a.estado }}">
+        <div class="row" style="justify-content:space-between">
+          <span class="tag {{ a.estado }}">
+            {% if a.estado == 'aprobado' %}Completed
+            {% elif a.estado == 'en_progreso' %}In progress
+            {% elif a.estado == 'reprobado' %}Not passed
+            {% else %}Not started{% endif %}
+          </span>
+          <span class="meta">{{ 'Video' if a.tipo_material == 'video' else 'Document' }}
+            · {{ a.duracion_segundos | duracion if a.tipo_material == 'video' else a.paginas ~ ' pages' }}</span>
+        </div>
+
+        <h3>{{ a.titulo }}</h3>
+        {% if a.descripcion %}<p class="meta" style="margin:0">{{ a.descripcion }}</p>{% endif %}
+
+        <div class="progress {{ 'partial' if a.avance < 100 }}"><i style="width: {{ a.avance }}%"></i></div>
+        <span class="meta">
+          Content progress: {{ a.avance | round(0, 'floor') | int }}%
+          {% if a.fecha_limite %}
+            · <span {% if overdue %}style="color:var(--pending-ink);font-weight:600"{% endif %}>
+              {{ 'Overdue since' if overdue else 'Due' }} {{ a.fecha_limite | fecha }}</span>
+          {% endif %}
+        </span>
+
+        <div class="actions">
+          <a class="btn" href="{{ url_for('estudiante.curso', asignacion_id=a.id) }}">
+            {% if a.estado == 'aprobado' %}Review again
+            {% elif a.avance > 0 %}Continue
+            {% else %}Start{% endif %}
+          </a>
+          {% if certificados.get(a.curso_id) %}
+            <a class="btn secondary" href="{{ url_for('estudiante.descargar_certificado', codigo=certificados[a.curso_id]['codigo']) }}">Download certificate</a>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
+  </div>
+{% endif %}
+
+<div class="card" style="margin-top:22px">
+  <h2>Change my password</h2>
+  <form method="post" action="{{ url_for('auth.cambiar_clave') }}" class="fields">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label for="actual">Current password</label><input id="actual" name="actual" type="password" required></div>
+    <div><label for="nueva">New password</label><input id="nueva" name="nueva" type="password" minlength="8" required></div>
+    <div><button class="btn secondary" type="submit">Update</button></div>
+  </form>
+</div>
+{% endblock %}
