@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Settings</h1>
+  <p>Details printed on the certificate and the mail server used to deliver it.</p>
+</header>
+
+<form method="post" action="{{ url_for('admin.guardar_configuracion') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="card">
+    <h2>Certificate details</h2>
+    <div class="fields">
+      <div><label for="org_name">Company</label><input id="org_name" name="org_name" value="{{ cfg.org_name }}"></div>
+      <div><label for="org_short">Short name</label><input id="org_short" name="org_short" value="{{ cfg.org_short }}"></div>
+      <div><label for="org_area">Issuing department</label><input id="org_area" name="org_area" value="{{ cfg.org_area }}"></div>
+      <div><label for="org_signer">Signed by</label><input id="org_signer" name="org_signer" value="{{ cfg.org_signer }}"></div>
+      <div><label for="org_signer_title">Signer title</label><input id="org_signer_title" name="org_signer_title" value="{{ cfg.org_signer_title }}"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Email</h2>
+    <p class="hint">Every certificate issued is emailed to the employee with a copy to the administrator. If the SMTP server is left blank, messages are saved as .eml files in <code>{{ bandeja }}</code>.</p>
+    <div class="fields">
+      <div><label for="admin_email">Administrator email</label>
+        <input id="admin_email" name="admin_email" type="email" value="{{ cfg.admin_email }}"></div>
+      <div><label for="smtp_sender">From address</label>
+        <input id="smtp_sender" name="smtp_sender" type="email" value="{{ cfg.smtp_sender }}"></div>
+      <div><label for="smtp_host">SMTP server</label>
+        <input id="smtp_host" name="smtp_host" value="{{ cfg.smtp_host }}" placeholder="smtp-relay.brevo.com"></div>
+      <div><label for="smtp_port">Port</label>
+        <input id="smtp_port" name="smtp_port" type="number" value="{{ cfg.smtp_port }}"></div>
+      <div><label for="smtp_user">SMTP username</label>
+        <input id="smtp_user" name="smtp_user" value="{{ cfg.smtp_user }}"></div>
+      <div><label for="smtp_password">SMTP password</label>
+        <input id="smtp_password" name="smtp_password" type="password" placeholder="{{ '••••••••  (saved)' if cfg.smtp_password else 'Not configured' }}"></div>
+      <div>
+        <label class="choice" style="display:flex;gap:8px;align-items:center;margin-top:22px;text-transform:none;letter-spacing:0">
+          <input type="checkbox" name="smtp_tls" value="1" {{ 'checked' if cfg.smtp_tls == '1' }} style="width:auto"> <span>Use STARTTLS</span>
+        </label>
+      </div>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="btn gold" type="submit">Save settings</button>
+    </div>
+  </div>
+</form>
+
+
+<div class="card">
+  <h2>Certificate design</h2>
+  <p class="hint">
+    Use the built-in design, or upload your own approved template. The platform fills in the
+    placeholders and converts it to PDF, so you can change the layout whenever the company does.
+  </p>
+
+  <div class="row" style="margin:14px 0">
+    <form method="post" action="{{ url_for('admin.cambiar_modo_certificado') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="modo" value="builtin">
+      <button class="btn {{ 'gold' if cfg.cert_mode != 'template' else 'secondary' }}" type="submit">
+        {{ 'In use: built-in design' if cfg.cert_mode != 'template' else 'Use built-in design' }}
+      </button>
+    </form>
+    <form method="post" action="{{ url_for('admin.cambiar_modo_certificado') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="modo" value="template">
+      <button class="btn {{ 'gold' if cfg.cert_mode == 'template' else 'secondary' }}" type="submit"
+              {{ 'disabled' if not cfg.cert_template }}>
+        {{ 'In use: my template' if cfg.cert_mode == 'template' else 'Use my template' }}
+      </button>
+    </form>
+    <form method="post" action="{{ url_for('admin.previsualizar_plantilla') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn secondary" type="submit">Download a sample</button>
+    </form>
+  </div>
+
+  {% if cfg.cert_template_name %}
+    <p class="hint">Current template: <strong>{{ cfg.cert_template_name }}</strong></p>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('admin.subir_plantilla') }}" enctype="multipart/form-data"
+        class="fields" style="margin-top:8px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="full-width">
+      <label for="plantilla">Upload template</label>
+      <input id="plantilla" name="plantilla" type="file"
+             accept="{{ extensiones_plantilla | join(',') }}" required>
+      <p class="hint" style="margin:6px 0 0">
+        Accepted: {{ extensiones_plantilla | join(', ') }}. Design it in Word or PowerPoint exactly as
+        approved, and type the placeholders below where each value should appear.
+      </p>
+    </div>
+    <div><button class="btn gold" type="submit">Upload and use</button></div>
+  </form>
+
+  <div class="marcadores" style="margin-top:18px">
+    <h3>Placeholders</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Type this</th><th>Gets replaced by</th></tr></thead>
+        <tbody>
+          {% for marcador, descripcion in marcadores %}
+            <tr><td><code>{{ marcador }}</code></td><td>{{ descripcion }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint" style="margin-top:10px">
+      Type each placeholder in one go, without changing font mid-word, so it stays in a single piece
+      inside the file. After uploading, use <strong>Download a sample</strong> to check the result.
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Send a test</h2>
+  <form method="post" action="{{ url_for('admin.probar_correo') }}" class="fields">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div><label for="destino">Send test to</label>
+      <input id="destino" name="destino" type="email" value="{{ cfg.admin_email }}"></div>
+    <div><button class="btn secondary" type="submit">Send test</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Recent emails</h2>
+  {% if correos %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Recipient</th><th>Subject</th><th>Status</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for c in correos %}
+            <tr class="{{ 'pendiente' if c.estado == 'error' }}">
+              <td>{{ c.creado_en | fecha_hora }}</td>
+              <td>{{ c.destinatario }}</td>
+              <td>{{ c.asunto }}</td>
+              <td>
+                {% if c.estado == 'enviado' %}<span class="tag aprobado">Sent</span>
+                {% elif c.estado == 'error' %}<span class="tag reprobado">Error</span>
+                {% else %}<span class="tag neutral">Local outbox</span>{% endif %}
+              </td>
+              <td style="color:var(--ink-soft);font-size:.85rem">{{ c.detalle }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">No emails sent yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

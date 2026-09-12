@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% set m = bloque.m %}
+{% block title %}{{ m.titulo }}{% endblock %}
+
+{% block content %}
+<header>
+  <p><a href="{{ url_for('estudiante.curso', asignacion_id=a.id) }}">← {{ a.titulo }}</a></p>
+  <h1>{{ m.titulo }}</h1>
+  {% if m.descripcion %}<p>{{ m.descripcion }}</p>{% endif %}
+</header>
+
+<div class="modulo-nav">
+  {% for otro in modulos %}
+    <a href="{{ url_for('estudiante.modulo', asignacion_id=a.id, modulo_id=otro.m.id) }}"
+       class="{{ 'actual' if otro.m.id == m.id }} {{ 'listo' if otro.aprobado and otro.m.id != m.id }}">
+      {{ loop.index }}. {{ otro.m.titulo }}
+    </a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  {% if m.tipo_material == 'video' %}
+    <div class="viewer">
+      <video id="material" preload="metadata" controls controlsList="nodownload noplaybackrate"
+             disablepictureinpicture oncontextmenu="return false"
+             src="{{ url_for('estudiante.video', asignacion_id=a.id, modulo_id=m.id) }}"></video>
+      <p class="viewer-note">The video must be watched in order. If you skip ahead, playback returns to the furthest point you reached.</p>
+    </div>
+  {% else %}
+    <div class="viewer">
+      <img id="pagina" alt="Course material page" oncontextmenu="return false"
+           src="{{ url_for('estudiante.pagina', asignacion_id=a.id, modulo_id=m.id, numero=1) }}">
+      <div class="viewer-bar">
+        <button type="button" id="anterior">← Previous</button>
+        <span id="indicador">Page 1 of {{ m.paginas }}</span>
+        <button type="button" id="siguiente">Next →</button>
+      </div>
+      <p class="viewer-note" id="mensaje-visor">Take a few seconds to read each page before moving on.</p>
+    </div>
+  {% endif %}
+
+  <div style="margin-top:18px">
+    <div class="progress {{ 'partial' if bloque.avance.avance < 100 }}">
+      <i id="barra" style="width: {{ bloque.avance.avance }}%"></i>
+    </div>
+    <p class="hint" style="margin:8px 0 0">
+      Progress recorded: <span id="porcentaje">{{ bloque.avance.avance | round(0, 'floor') | int }}</span>%
+      {% if m.tipo_material == 'video' %}
+        · the exam unlocks at {{ minimo_video | int }}%
+      {% else %}
+        · the exam unlocks on the last page
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>{{ m.quiz_titulo or 'Module exam' }}</h2>
+
+  {% if bloque.aprobado %}
+    <p>You passed this module{% if bloque.avance.completado_en %} on {{ bloque.avance.completado_en | fecha }}{% endif %}.</p>
+    {% if posicion + 1 < modulos | length %}
+      <a class="btn gold" href="{{ url_for('estudiante.modulo', asignacion_id=a.id, modulo_id=modulos[posicion + 1].m.id) }}">
+        Continue to module {{ posicion + 2 }} →</a>
+    {% else %}
+      <a class="btn gold" href="{{ url_for('estudiante.curso', asignacion_id=a.id) }}">Back to the course</a>
+    {% endif %}
+  {% elif not m.quiz_id %}
+    <p class="hint">This module has no exam configured yet.</p>
+  {% else %}
+    <p class="hint">
+      {{ m.puntaje_minimo }} out of 100 to pass ·
+      {{ m.intentos_max - bloque.intentos | length }} attempt{{ 's' if (m.intentos_max - bloque.intentos | length) != 1 }} remaining
+      {% if m.preguntas_por_intento %}
+        · {{ m.preguntas_por_intento }} question{{ 's' if m.preguntas_por_intento != 1 }} drawn at random from a bank of {{ m.banco }}
+      {% endif %}
+    </p>
+    {% if bloque.intentos %}
+      <p class="hint">Last attempt: {{ bloque.intentos[0].puntaje | round(0) | int }} points on {{ bloque.intentos[0].finalizado_en | fecha_hora }}.</p>
+    {% endif %}
+
+    {% if bloque.intentos | length >= m.intentos_max %}
+      <p style="color:var(--pending-ink)">You have used all attempts. Ask the administrator to reopen this training.</p>
+    {% else %}
+      <a class="btn gold" id="ir-examen"
+         href="{{ url_for('estudiante.examen', asignacion_id=a.id, modulo_id=m.id) }}"
+         {% if not bloque.avance.material_completo %}aria-disabled="true" style="pointer-events:none;background:#aab4bd;border-color:#aab4bd;color:#fff"{% endif %}>
+        Take the exam
+      </a>
+      <p id="candado" class="hint" style="margin:10px 0 0" {% if bloque.avance.material_completo %}hidden{% endif %}>
+        Finish the content first to unlock the exam.
+      </p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.CURSO = {
+    urlAvance: "{{ url_for('estudiante.avance', asignacion_id=a.id, modulo_id=m.id) }}",
+    urlPagina: "{{ url_for('estudiante.pagina', asignacion_id=a.id, modulo_id=m.id, numero=0) }}",
+    csrf: "{{ csrf_token() }}",
+    tipo: "{{ m.tipo_material }}",
+    duracion: {{ m.duracion_segundos or 0 }},
+    paginas: {{ m.paginas or 0 }},
+    maxPosicion: {{ bloque.avance.max_posicion or 0 }},
+    completo: {{ 'true' if bloque.avance.material_completo else 'false' }},
+    segundosPagina: {{ segundos_pagina }}
+  };
+</script>
+<script src="{{ url_for('static', filename='js/visor.js') }}"></script>
+{% endblock %}
