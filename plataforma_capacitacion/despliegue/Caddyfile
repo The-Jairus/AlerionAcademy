@@ -1,0 +1,48 @@
+{$DOMINIO} {
+	tls {$CORREO}
+
+	# Los videos son archivos grandes: sin este límite alto, la subida falla.
+	request_body {
+		max_size 1GB
+	}
+
+	# ------------------------------------------------------------------
+	# Material pesado (video) servido por Caddy, no por la aplicación.
+	#
+	# Antes de entregar un archivo, Caddy le pregunta a la aplicación si esta
+	# persona tiene permiso (/api/authorize). La aplicación responde en
+	# milisegundos y queda libre; la entrega del archivo, que es lo que tarda,
+	# la hace Caddy. Así los espectadores simultáneos dejan de competir por los
+	# procesos de la aplicación.
+	# ------------------------------------------------------------------
+	handle /media/* {
+		forward_auth app:8000 {
+			uri /api/authorize
+			# la cookie de sesión viaja en la petición, así que la aplicación
+			# sabe quién es quien pide el archivo
+		}
+		root * /datos
+		uri strip_prefix /media
+		file_server {
+			precompressed
+		}
+		header Cache-Control "private, max-age=0, must-revalidate"
+		header Content-Disposition "inline"
+	}
+
+	encode gzip
+	reverse_proxy app:8000 {
+		flush_interval -1
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "same-origin"
+	}
+
+	log {
+		output file /data/acceso.log
+	}
+}
