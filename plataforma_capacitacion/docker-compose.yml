@@ -1,0 +1,42 @@
+# Levanta la plataforma con HTTPS automático en tu dominio.
+#
+#   1. Copia .env.example a .env y pon ahí tus valores (una sola vez).
+#   2. Apunta el dominio (registro A) a la IP del servidor.
+#   3. docker compose up -d --build
+#
+# La configuración vive en .env, que git no toca: las actualizaciones ya no la borran.
+# Caddy pide y renueva solo el certificado de Let's Encrypt.
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: "${SECRET_KEY:?falta SECRET_KEY en el archivo .env}"
+      HTTPS: "1"
+      DATA_DIR: /datos
+    volumes:
+      - datos:/datos
+    expose:
+      - "8000"
+
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMINIO: "${DOMINIO:?falta DOMINIO en el archivo .env}"
+      CORREO: "${CORREO:?falta CORREO en el archivo .env}"
+    volumes:
+      - ./despliegue/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+
+volumes:
+  datos:
+  caddy_data:
+  caddy_config:
