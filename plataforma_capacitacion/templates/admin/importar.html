@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Import records{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Import training records</h1>
+  <p>For training completed before this platform existed. Imported records count in the training
+     summary exactly like the ones done here, and the certificate PDF stays available for download.</p>
+</header>
+
+<div class="card">
+  <h2>Import one record</h2>
+  <form method="post" action="{{ url_for('admin.importar_registro') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fields">
+      <div>
+        <label for="usuario_id">Person</label>
+        <select id="usuario_id" name="usuario_id" required>
+          <option value="">Select…</option>
+          {% for u in usuarios %}<option value="{{ u.id }}">{{ u.nombre }} · {{ u.email }}</option>{% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="curso_id">Course</label>
+        <select id="curso_id" name="curso_id" required>
+          <option value="">Select…</option>
+          {% for c in cursos %}<option value="{{ c.id }}">{{ c.titulo }}</option>{% endfor %}
+        </select>
+      </div>
+      <div><label for="fecha">Completion date</label>
+        <input id="fecha" name="fecha" type="date" required></div>
+      <div><label for="puntaje">Score</label>
+        <input id="puntaje" name="puntaje" type="number" min="0" max="100" value="100"></div>
+      <div><label for="codigo">Certificate code</label>
+        <input id="codigo" name="codigo" placeholder="Leave blank to generate one"></div>
+      <div class="full-width">
+        <label for="certificado">Certificate PDF (optional)</label>
+        <input id="certificado" name="certificado" type="file" accept=".pdf">
+        <p class="hint" style="margin:6px 0 0">The original certificate, so it stays downloadable from
+           the Certificates section.</p>
+      </div>
+      <div><button class="btn gold" type="submit">Import record</button></div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Bulk import from CSV</h2>
+  <p class="hint">
+    For many records at once, without PDF files. The file needs a header row with these columns:
+  </p>
+  <p class="marcadores">
+    <code>email</code> <code>course</code> <code>date</code> <code>score</code> <code>code</code>
+  </p>
+  <p class="hint">
+    <code>email</code> must match an existing user and <code>course</code> the exact course title.
+    <code>date</code> in YYYY-MM-DD. <code>score</code> and <code>code</code> are optional.
+  </p>
+  <form method="post" action="{{ url_for('admin.importar_csv') }}" enctype="multipart/form-data" class="fields">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="full-width"><label for="csv">CSV file</label>
+      <input id="csv" name="csv" type="file" accept=".csv" required></div>
+    <div><button class="btn" type="submit">Import file</button></div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Recently imported</h2>
+  {% if recientes %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Code</th><th>Person</th><th>Course</th><th class="num">Score</th>
+                   <th>Completed</th><th>PDF</th></tr></thead>
+        <tbody>
+          {% for c in recientes %}
+            <tr>
+              <td><code>{{ c.codigo }}</code></td>
+              <td>{{ c.usuario }}</td>
+              <td>{{ c.curso }}</td>
+              <td class="num">{{ c.puntaje | round(0) | int }}</td>
+              <td>{{ c.emitido_en | fecha }}</td>
+              <td>
+                {% if c.archivo %}
+                  <a class="btn small secondary" href="{{ url_for('admin.ver_certificado', codigo=c.codigo) }}">PDF</a>
+                {% else %}<span class="hint">no file</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">No records imported yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
