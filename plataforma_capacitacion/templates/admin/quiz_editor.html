@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Exam · {{ modulo.titulo }}{% endblock %}
+
+{% block content %}
+<header>
+  <p><a href="{{ url_for('admin.curso_detalle', curso_id=modulo.curso_id) }}">← {{ modulo.curso }}</a></p>
+  <h1>{{ modulo.titulo }}</h1>
+  <p class="hint">Exam for this module. It unlocks once the person finishes the module content.</p>
+</header>
+
+<div class="card">
+  <h2>Settings</h2>
+  <form method="post" action="{{ url_for('admin.guardar_quiz', modulo_id=modulo.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fields">
+      <div><label for="titulo">Exam title</label>
+        <input type="text" id="titulo" name="titulo" value="{{ quiz.titulo if quiz else modulo.titulo ~ ' exam' }}"></div>
+      <div><label for="puntaje_minimo">Passing score</label>
+        <input id="puntaje_minimo" name="puntaje_minimo" type="number" min="1" max="100"
+               value="{{ quiz.puntaje_minimo if quiz else 70 }}"></div>
+      <div><label for="intentos_max">Attempts allowed</label>
+        <input id="intentos_max" name="intentos_max" type="number" min="1" max="10"
+               value="{{ quiz.intentos_max if quiz else 3 }}"></div>
+      <div><label for="preguntas_por_intento">Questions per attempt</label>
+        <input id="preguntas_por_intento" name="preguntas_por_intento" type="number" min="0"
+               value="{{ quiz.preguntas_por_intento if quiz else 0 }}">
+        <p class="hint" style="margin:6px 0 0">0 = use the whole bank.</p></div>
+      <div>
+        <label for="mezclar">Randomise</label>
+        <label class="check">
+          <input type="checkbox" id="mezclar" name="mezclar" value="1"
+                 {{ 'checked' if (quiz.mezclar if quiz else 1) }}>
+          <span>Shuffle questions and answer options</span>
+        </label>
+      </div>
+      <div><button class="btn gold" type="submit">{{ 'Save' if quiz else 'Create exam' }}</button></div>
+    </div>
+  </form>
+</div>
+
+{% if quiz %}
+  <div class="card">
+    <h2>Add question to the bank</h2>
+    <form method="post" action="{{ url_for('admin.agregar_pregunta', modulo_id=modulo.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label for="enunciado">Question</label>
+      <textarea id="enunciado" name="enunciado" required
+                placeholder="What must be verified before the aircraft is towed?"></textarea>
+      <p class="hint" style="margin:14px 0 8px">Mark the correct option. Unused options can be left blank.</p>
+      {% for i in range(1, 5) %}
+        <div class="row" style="margin-bottom:8px">
+          <input type="radio" name="correcta" value="{{ i }}" {{ 'checked' if i == 1 }}
+                 aria-label="Correct option {{ i }}">
+          <input type="text" name="opcion{{ i }}" placeholder="Option {{ i }}"
+                 {{ 'required' if i <= 2 }} style="flex:1">
+        </div>
+      {% endfor %}
+      <button class="btn" type="submit">Add question</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>{{ preguntas | length }} question{{ 's' if preguntas | length != 1 }} in the bank</h2>
+    {% if quiz.preguntas_por_intento and preguntas | length %}
+      <p class="hint">Each attempt draws {{ quiz.preguntas_por_intento }} of these at random
+        {% if preguntas | length < quiz.preguntas_por_intento %}
+          — <span style="color:var(--pending-ink)">the bank is smaller than that, so every question will be used</span>
+        {% endif %}.
+      </p>
+    {% endif %}
+    {% if preguntas %}
+      {% for p in preguntas %}
+        <div class="question">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <h3 style="margin:0">{{ loop.index }}. {{ p.fila.enunciado }}</h3>
+            <form method="post" action="{{ url_for('admin.eliminar_pregunta', pregunta_id=p.fila.id) }}"
+                  onsubmit="return confirm('Delete this question?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn small danger" type="submit">Delete</button>
+            </form>
+          </div>
+          <ul style="margin:10px 0 0;padding-left:18px">
+            {% for o in p.opciones %}
+              <li style="{{ 'color:var(--success);font-weight:600' if o.correcta else 'color:var(--ink-medium)' }}">
+                {{ o.texto }}{% if o.correcta %} · correct answer{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p class="empty">This exam has no questions yet.</p>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="card"><p class="empty">Save the settings first to start adding questions.</p></div>
+{% endif %}
+{% endblock %}
