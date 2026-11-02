@@ -1,0 +1,61 @@
+{# Campos compartidos por el formulario de crear y el de editar un curso.
+   Se usan desde cursos.html y curso_detalle.html para que las dos pantallas
+   pregunten exactamente lo mismo. #}
+
+{% macro vigencia(curso=None, prefijo='n') %}
+  {% set es_una_vez = curso and curso.one_time %}
+  <div>
+    <label class="casilla" for="{{ prefijo }}_one_time">
+      <input type="checkbox" id="{{ prefijo }}_one_time" name="one_time"
+             data-controla="{{ prefijo }}_vigencia" {{ 'checked' if es_una_vez }}>
+      One-time course (never expires)
+    </label>
+    <p class="pista">A one-time course is completed once and stays valid: it never shows up
+       in the expiry control.</p>
+  </div>
+  <div class="dependiente" id="{{ prefijo }}_vigencia" data-apagado="{{ 1 if es_una_vez else 0 }}">
+    <label for="{{ prefijo }}_vigencia_meses">Validity (months)</label>
+    <input type="number" id="{{ prefijo }}_vigencia_meses" name="vigencia_meses" min="1" max="600"
+           value="{{ curso.vigencia_meses if curso else 12 }}" {{ 'disabled' if es_una_vez }}>
+  </div>
+{% endmacro %}
+
+
+{% macro certificado(curso=None, prefijo='n') %}
+  {% set firmado = curso and curso.cert_tipo == 'signed' %}
+  <div class="full-width">
+    <label for="{{ prefijo }}_cert_tipo">Certificate type</label>
+    <select id="{{ prefijo }}_cert_tipo" name="cert_tipo" data-controla="{{ prefijo }}_firma"
+            data-valor-activo="signed">
+      <option value="unsigned" {{ 'selected' if not firmado }}>Unsigned certificate</option>
+      <option value="signed" {{ 'selected' if firmado }}>Signed certificate</option>
+    </select>
+    <p class="pista">An unsigned certificate states that it was issued electronically. A signed one
+       prints the signature, the name and the job title of whoever signs it.</p>
+  </div>
+  <div class="full-width dependiente" id="{{ prefijo }}_firma"
+       data-apagado="{{ 0 if firmado else 1 }}">
+    <div class="fields" style="margin:0">
+      <div><label for="{{ prefijo }}_firma_nombre">Signed by</label>
+        <input type="text" id="{{ prefijo }}_firma_nombre" name="firma_nombre"
+               placeholder="Full name of the signer"
+               value="{{ curso.firma_nombre or '' if curso else '' }}"
+               {{ '' if firmado else 'disabled' }}></div>
+      <div><label for="{{ prefijo }}_firma_cargo">Position / title</label>
+        <input type="text" id="{{ prefijo }}_firma_cargo" name="firma_cargo"
+               placeholder="Director of Training"
+               value="{{ curso.firma_cargo or '' if curso else '' }}"
+               {{ '' if firmado else 'disabled' }}></div>
+      <div><label for="{{ prefijo }}_firma_imagen">Signature image</label>
+        <input type="file" id="{{ prefijo }}_firma_imagen" name="firma_imagen"
+               accept=".png,.jpg,.jpeg" {{ '' if firmado else 'disabled' }}></div>
+      <p class="pista full-width" style="margin:0">
+        {%- if curso and curso.firma_archivo %}
+          A signature image is already on file; upload another one only to replace it.
+        {%- else %}
+          PNG with a transparent background works best. The blank margin is trimmed automatically.
+        {%- endif %}
+      </p>
+    </div>
+  </div>
+{% endmacro %}
