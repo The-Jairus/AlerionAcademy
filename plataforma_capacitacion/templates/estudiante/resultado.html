@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set m = bloque.m %}
+{% block title %}Result · {{ m.titulo }}{% endblock %}
+
+{% block content %}
+<div class="card result {{ 'passed' if aprobado else 'failed' }}">
+  {% if aprobado %}
+    <svg width="54" height="54" viewBox="0 0 60 60" style="margin:0 auto 14px;display:block" aria-hidden="true">
+      <circle cx="30" cy="30" r="27" fill="none" stroke="#c6a15b" stroke-width="2"/>
+      <circle cx="30" cy="30" r="22" fill="none" stroke="#c6a15b" stroke-width=".8"/>
+      <path d="M20 31l7 7 15-16" stroke="#c6a15b" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  {% endif %}
+
+  <div class="score">{{ puntaje | round(0) | int }}</div>
+  <p style="margin:6px auto 18px;color:var(--ink-soft)">
+    {{ aciertos }} of {{ total }} correct · {{ m.puntaje_minimo }} required to pass
+  </p>
+
+  {% if aprobado and curso_listo %}
+    <h1>You completed “{{ a.titulo }}”</h1>
+    <p style="margin:0 auto 20px">
+      Every module is passed. Certificate <strong>{{ codigo }}</strong> was emailed to
+      {{ user.email }}, with a copy to the training department.
+    </p>
+    <div class="row" style="justify-content:center">
+      <a class="btn gold" href="{{ url_for('estudiante.descargar_certificado', codigo=codigo) }}">Download certificate</a>
+      <a class="btn secondary" href="{{ url_for('estudiante.panel') }}">Back to my training</a>
+    </div>
+  {% elif aprobado %}
+    <h1>Module passed</h1>
+    <p style="margin:0 auto 20px">Keep going: the course is complete once every module is passed.</p>
+    <div class="row" style="justify-content:center">
+      <a class="btn gold" href="{{ url_for('estudiante.curso', asignacion_id=a.id) }}">Next module →</a>
+    </div>
+  {% else %}
+    <h1>You did not reach the passing score</h1>
+    <p style="margin:0 auto 20px">
+      {% if intentos_restantes > 0 %}
+        You have {{ intentos_restantes }} attempt{{ 's' if intentos_restantes != 1 }} left. Review the content and try again.
+      {% else %}
+        You have used all attempts. Ask the training department to reopen this course.
+      {% endif %}
+    </p>
+    <div class="row" style="justify-content:center">
+      <a class="btn" href="{{ url_for('estudiante.modulo', asignacion_id=a.id, modulo_id=m.id) }}">Review the content</a>
+      {% if intentos_restantes > 0 %}
+        <a class="btn secondary" href="{{ url_for('estudiante.examen', asignacion_id=a.id, modulo_id=m.id) }}">Try again</a>
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
