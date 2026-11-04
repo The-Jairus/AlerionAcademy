@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Certificate {{ c.codigo }}{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Certificate {{ c.codigo }}</h1>
+  <p class="hint">{{ c.usuario }} · {{ c.curso }} · issued {{ c.emitido_en | fecha }}
+     · score {{ c.puntaje | round(0) | int }}/100</p>
+</header>
+
+<div class="card">
+  <div class="cert-visor">
+    <object data="{{ url_for('admin.ver_certificado', codigo=c.codigo) }}#toolbar=0&amp;navpanes=0"
+            type="application/pdf" aria-label="Certificate preview">
+      <p class="empty" style="padding:40px">
+        Your browser cannot show the PDF inline. Use the download button below to open it.
+      </p>
+    </object>
+  </div>
+
+  <div class="row" style="margin-top:18px;gap:10px">
+    <a class="btn gold" href="{{ url_for('admin.ver_certificado', codigo=c.codigo) }}" download>
+      Download PDF</a>
+    <a class="btn secondary" href="{{ volver }}">Cancel</a>
+    <form method="post" class="inline" action="{{ url_for('admin.reenviar_certificado', codigo=c.codigo) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn secondary" type="submit">Resend by email</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
