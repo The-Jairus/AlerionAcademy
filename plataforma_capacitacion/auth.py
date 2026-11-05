@@ -1,0 +1,228 @@
+"""Ingreso, cierre de sesión y control de acceso por rol."""
+import secrets
+import time
+from functools import wraps
+
+from flask import (Blueprint, flash, g, redirect, render_template, request,
+                   session, url_for)
+from werkzeug.security import check_password_hash, generate_password_hash
+
+from database import ahora, consultar, ejecutar
+
+bp = Blueprint("auth", __name__)
+
+_INTENTOS: dict[str, list] = {}      # email -> [conteo, momento_del_bloqueo]
+MAX_INTENTOS = 8
+BLOQUEO_SEGUNDOS = 300
+
+
+def registrar(accion, objeto=None, objeto_id=None, detalle=None):
+    """Deja constancia de lo que pasó. Nunca interrumpe la operación real.
+
+    Vive aquí porque es el módulo que sabe quién está actuando, y así la usan
+    tanto las pantallas de administración como las del aprendiz.
+    """
+    try:
+        g.bitacora_escrita = True       # avisa a la red de seguridad de app.py
+        yo = usuario_actual()
+        try:
+            ip = (request.headers.get("X-Forwarded-For") or request.remote_addr or "")
+            ip = ip.split(",")[0].strip()
+        except Exception:
+            ip = ""                     # fuera de una petición (tareas programadas)
+        ejecutar(
+            "INSERT INTO bitacora (usuario_id, usuario_nombre, accion, objeto, objeto_id,"
+            " detalle, ip, creado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (yo["id"] if yo else None, yo["nombre"] if yo else "system", accion,
+             objeto, objeto_id, detalle, ip, ahora()))
+    except Exception as error:                  # la bitácora no puede tumbar nada
+        print(f"[bitacora] no se pudo registrar {accion}: {error}", flush=True)
+
+
+def hash_password(clave: str) -> str:
+    return generate_password_hash(clave, method="pbkdf2:sha256:260000")
+
+
+def usuario_actual():
+    if "usuario" not in g:
+        g.usuario = None
+        uid = session.get("usuario_id")
+        if uid:
+            g.usuario = consultar(
+                "SELECT * FROM usuarios WHERE id = ? AND activo = 1", (uid,), uno=True
+            )
+            if g.usuario is None:
+                session.clear()
+    return g.usuario
+
+
+def token_csrf() -> str:
+    if "csrf" not in session:
+        session["csrf"] = secrets.token_urlsafe(32)
+    return session["csrf"]
+
+
+def csrf_valido() -> bool:
+    enviado = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
+    return bool(enviado) and secrets.compare_digest(enviado, session.get("csrf", ""))
+
+
+def login_requerido(vista):
+    @wraps(vista)
+    def envoltura(*args, **kwargs):
+        if usuario_actual() is None:
+            return redirect(url_for("auth.login", siguiente=request.path))
+        return vista(*args, **kwargs)
+    return envoltura
+
+
+def es_admin(usuario=None) -> bool:
+    usuario = usuario or usuario_actual()
+    return bool(usuario) and usuario["rol"] == "admin"
+
+
+def es_instructor(usuario=None) -> bool:
+    """Instructor o admin: todo lo que puede un instructor, un admin también."""
+    usuario = usuario or usuario_actual()
+    return bool(usuario) and usuario["rol"] in ("instructor", "admin")
+
+
+def _puerta(prueba, mensaje):
+    """Construye un decorador que exige un rol."""
+    def decorador(vista):
+        @wraps(vista)
+        def envoltura(*args, **kwargs):
+            usuario = usuario_actual()
+            if usuario is None:
+                return redirect(url_for("auth.login", siguiente=request.path))
+            if not prueba(usuario):
+                flash(mensaje, "error")
+                return redirect(url_for("estudiante.panel"))
+            return vista(*args, **kwargs)
+        return envoltura
+    return decorador
+
+
+admin_requerido = _puerta(es_admin, "That section is for administrators only.")
+instructor_requerido = _puerta(
+    es_instructor, "That section is for instructors and administrators only.")
+
+
+def puede_editar_curso(curso, usuario=None) -> bool:
+    """El admin edita cualquier curso; el instructor, los suyos.
+
+    Suyos son los que creó y aquellos en los que lo agregaron como instructor
+    adicional (tabla curso_instructores).
+    """
+    usuario = usuario or usuario_actual()
+    if usuario is None or curso is None:
+        return False
+    if usuario["rol"] == "admin":
+        return True
+    if usuario["rol"] != "instructor":
+        return False
+    try:
+        dueno = curso["creado_por"]
+    except (KeyError, IndexError):
+        dueno = None
+    if dueno is not None and int(dueno) == int(usuario["id"]):
+        return True
+
+    # Instructor adicional. La fila debe decir de qué curso habla: las consultas
+    # traen `curso_id` para módulos y asignaciones. Si no lo trae, manda el dueño.
+    try:
+        curso_id = curso["curso_id"]
+    except (KeyError, IndexError):
+        return False
+    if curso_id is None:
+        return False
+    return consultar(
+        "SELECT 1 AS ok FROM curso_instructores WHERE curso_id = ? AND usuario_id = ?",
+        (curso_id, usuario["id"]), uno=True) is not None
+
+
+def _bloqueado(email: str) -> int:
+    registro = _INTENTOS.get(email)
+    if not registro:
+        return 0
+    conteo, ultimo = registro
+    if conteo >= MAX_INTENTOS:
+        restante = int(BLOQUEO_SEGUNDOS - (time.time() - ultimo))
+        if restante > 0:
+            return restante
+        _INTENTOS.pop(email, None)
+    return 0
+
+
+@bp.route("/login", methods=["GET", "POST"])
+def login():
+    if usuario_actual():
+        return redirect(url_for("inicio"))
+
+    if request.method == "POST":
+        email = (request.form.get("email") or "").strip().lower()
+        clave = request.form.get("password") or ""
+        espera = _bloqueado(email)
+        if espera:
+            flash(f"Too many failed attempts. Try again in {espera // 60 + 1} minutes.",
+                  "error")
+            return render_template("login.html", email=email), 429
+
+        usuario = consultar("SELECT * FROM usuarios WHERE email = ?", (email,), uno=True)
+        if usuario and usuario["activo"] and check_password_hash(usuario["password_hash"], clave):
+            _INTENTOS.pop(email, None)
+            session.clear()
+            session["usuario_id"] = usuario["id"]
+            session.permanent = True
+            # usuario_actual() ya había guardado "nadie" en el caché de esta
+            # petición, cuando se comprobó si venía con sesión abierta. Se limpia
+            # para que la bitácora anote el nombre y no "system".
+            g.pop("usuario", None)
+            registrar("sesion.entrar", None, usuario["id"], usuario["rol"])
+            siguiente = request.args.get("siguiente") or request.form.get("siguiente") or ""
+            if siguiente.startswith("/") and not siguiente.startswith("//"):
+                return redirect(siguiente)
+            return redirect(url_for("inicio"))
+
+        conteo, _ = _INTENTOS.get(email, [0, 0])
+        _INTENTOS[email] = [conteo + 1, time.time()]
+        # Los intentos fallidos también quedan: es lo primero que se mira si
+        # alguien reporta que no puede entrar, o si hay algo raro.
+        registrar("sesion.fallida", email, usuario["id"] if usuario else None,
+                  "inactive account" if usuario and not usuario["activo"]
+                  else "wrong email or password")
+        if usuario and not usuario["activo"]:
+            flash("Your account is inactive. Please contact the administrator.", "error")
+        else:
+            flash("Incorrect email or password.", "error")
+        return render_template("login.html", email=email), 401
+
+    return render_template("login.html", email="")
+
+
+@bp.route("/logout", methods=["POST", "GET"])
+def logout():
+    yo = usuario_actual()
+    registrar("sesion.salir", None, yo["id"] if yo else None)
+    session.clear()
+    flash("You have been signed out.", "ok")
+    return redirect(url_for("auth.login"))
+
+
+@bp.route("/change-password", methods=["POST"])
+@login_requerido
+def cambiar_clave():
+    from database import ejecutar
+    usuario = usuario_actual()
+    actual = request.form.get("actual") or ""
+    nueva = request.form.get("nueva") or ""
+    if not check_password_hash(usuario["password_hash"], actual):
+        flash("The current password does not match.", "error")
+    elif len(nueva) < 8:
+        flash("The new password must be at least 8 characters long.", "error")
+    else:
+        ejecutar("UPDATE usuarios SET password_hash = ? WHERE id = ?",
+                 (hash_password(nueva), usuario["id"]))
+        registrar("clave.cambiar", usuario["nombre"], usuario["id"])
+        flash("Password updated.", "ok")
+    return redirect(request.referrer or url_for("inicio"))

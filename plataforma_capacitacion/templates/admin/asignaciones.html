@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Assignments{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Assignments</h1>
+  <p>Assign training to people and follow who has done it.</p>
+</header>
+
+{% if cursos and usuarios %}
+<div class="card">
+  <h2>Assign training</h2>
+  <form method="post" action="{{ url_for('admin.crear_asignacion') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <div class="asignar">
+      <div class="asignar-col">
+        <div class="asignar-cab">
+          <label>1. Courses</label>
+          <span class="conteo" data-conteo="curso_id">0 selected</span>
+        </div>
+        <input type="search" class="filtro" data-filtra="lista-cursos"
+               placeholder="Filter courses…" aria-label="Filter courses">
+        <div class="lista-sel" id="lista-cursos">
+          {% for c in cursos %}
+            <label class="fila-sel" data-texto="{{ (c.titulo ~ ' ' ~ (c.categoria or '')) | lower }}">
+              <input type="checkbox" name="curso_id" value="{{ c.id }}">
+              <span>
+                <strong>{{ c.titulo }}</strong>
+                {% if c.categoria %}<small>{{ c.categoria }}</small>{% endif %}
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+
+      <div class="asignar-col">
+        <div class="asignar-cab">
+          <label>2. People</label>
+          <span class="conteo" data-conteo="usuario_id">0 selected</span>
+        </div>
+        <input type="search" class="filtro" data-filtra="lista-personas"
+               placeholder="Search by name, email or job title…" aria-label="Search people">
+        <div class="barra-sel">
+          <button type="button" class="enlace" data-todos="lista-personas">Select all shown</button>
+          <button type="button" class="enlace" data-ninguno="lista-personas">Clear</button>
+        </div>
+        <div class="lista-sel" id="lista-personas">
+          {% for u in usuarios %}
+            <label class="fila-sel" data-texto="{{ (u.nombre ~ ' ' ~ u.email ~ ' ' ~ (u.cargo or '')) | lower }}">
+              <input type="checkbox" name="usuario_id" value="{{ u.id }}">
+              <span>
+                <strong>{{ u.nombre }}</strong>
+                <small>{{ u.email }}{% if u.cargo %} · {{ u.cargo }}{% endif %}</small>
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <div class="fields" style="margin-top:18px">
+      <div><label for="fecha_limite">Due date (optional)</label>
+        <input id="fecha_limite" name="fecha_limite" type="date"></div>
+      <div>
+        <label for="notificar">Notification</label>
+        <label class="casilla recuadro" for="notificar">
+          <input type="checkbox" id="notificar" name="notificar" value="1" checked>
+          Email them a link
+        </label>
+      </div>
+      <div><button class="btn gold" type="submit">Assign</button></div>
+    </div>
+  </form>
+</div>
+{% else %}
+  <div class="card"><p class="empty">You need at least one published course and one active
+     person before you can assign training.</p></div>
+{% endif %}
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <h2 style="margin:0">Current assignments
+      <span style="color:var(--ink-soft);font-weight:400;font-size:.9rem">({{ total }})</span></h2>
+    <form method="get" class="row">
+      <input type="search" name="q" value="{{ q }}" placeholder="Find a person or a course"
+             style="min-width:280px">
+      <button class="btn secondary" type="submit">Search</button>
+      {% if q %}<a class="btn secondary small" href="{{ url_for('admin.asignaciones') }}">Clear</a>{% endif %}
+    </form>
+  </div>
+
+  {% if grupos %}
+    {% for g in grupos %}
+      <details class="grupo-curso" {{ 'open' if q or grupos | length == 1 }}>
+        <summary>
+          <span class="gc-titulo">{{ g.titulo }}</span>
+          {% if not g.activo %}<span class="tag neutral">Hidden</span>{% endif %}
+          <span class="gc-datos">
+            {{ g.personas | length }} assigned · {{ g.aprobados }} completed
+          </span>
+          {% if g.vencidos %}
+            <span class="tag danger" title="Past the due date">⚠ {{ g.vencidos }} overdue</span>
+          {% endif %}
+        </summary>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Person</th><th>Assigned</th><th>Due</th><th>Completed</th>
+                  <th class="num">Progress</th><th>Status</th><th></th></tr>
+            </thead>
+            <tbody>
+              {% for p in g.personas %}
+                {% set a = p.a %}
+                <tr class="{{ 'pendiente' if p.vencido }}">
+                  <td>
+                    <a href="{{ url_for('admin.ficha_usuario', usuario_id=a.usuario_id) }}">{{ a.usuario }}</a>
+                    <div style="color:var(--ink-soft);font-size:.82rem">{{ a.email }}</div>
+                  </td>
+                  <td>{{ a.asignado_en | fecha }}</td>
+                  <td>
+                    {% if a.fecha_limite %}
+                      {% if p.vencido %}
+                        <span class="tag danger" title="This person is past the due date">⚠ {{ a.fecha_limite | fecha }}</span>
+                      {% else %}{{ a.fecha_limite | fecha }}{% endif %}
+                    {% else %}—{% endif %}
+                  </td>
+                  <td>{{ a.completado_en | fecha if a.completado_en else '—' }}</td>
+                  <td class="num">{{ a.avance | round(0) | int }}%</td>
+                  <td><span class="tag {{ a.estado }}">{{ estados.get(a.estado, a.estado) }}</span></td>
+                  <td>
+                    <div class="row">
+                      <a class="btn small secondary"
+                         href="{{ url_for('admin.ficha_usuario', usuario_id=a.usuario_id) }}">Preview</a>
+                      {% if a.certificado %}
+                        <a class="btn small gold"
+                           href="{{ url_for('admin.previsualizar_certificado', codigo=a.certificado) }}">Certificate</a>
+                      {% endif %}
+                      <form method="post" class="inline" action="{{ url_for('admin.reabrir_asignacion', asignacion_id=a.id) }}"
+                            onsubmit="return confirm('Reset this course for {{ a.usuario }}? They start again from the first module.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn small secondary" type="submit">Reset</button>
+                      </form>
+                      <form method="post" class="inline" action="{{ url_for('admin.eliminar_asignacion', asignacion_id=a.id) }}"
+                            onsubmit="return confirm('Unenroll {{ a.usuario }} from this course?')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn small danger" type="submit">Unenroll</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    {% endfor %}
+  {% else %}
+    <p class="empty">{{ 'Nothing matches that search.' if q else 'No training assigned yet.' }}</p>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Filtro y conteo de las listas de selección: casillas, buscador y
+  // "select all shown", sin atajos de teclado que haya que conocer.
+  function visibles(lista) {
+    return Array.prototype.filter.call(lista.querySelectorAll('.fila-sel'),
+      function (f) { return !f.hidden; });
+  }
+  function actualizarConteo(nombre) {
+    var span = document.querySelector('[data-conteo="' + nombre + '"]');
+    if (!span) return;
+    var n = document.querySelectorAll('input[name="' + nombre + '"]:checked').length;
+    span.textContent = n + ' selected';
+    span.classList.toggle('activo', n > 0);
+  }
+  document.querySelectorAll('.filtro').forEach(function (campo) {
+    campo.addEventListener('input', function () {
+      var lista = document.getElementById(campo.dataset.filtra);
+      var texto = campo.value.trim().toLowerCase();
+      lista.querySelectorAll('.fila-sel').forEach(function (fila) {
+        fila.hidden = texto && fila.dataset.texto.indexOf(texto) === -1;
+      });
+    });
+  });
+  document.querySelectorAll('[data-todos]').forEach(function (boton) {
+    boton.addEventListener('click', function () {
+      var lista = document.getElementById(boton.dataset.todos);
+      visibles(lista).forEach(function (f) { f.querySelector('input').checked = true; });
+      actualizarConteo('usuario_id');
+    });
+  });
+  document.querySelectorAll('[data-ninguno]').forEach(function (boton) {
+    boton.addEventListener('click', function () {
+      var lista = document.getElementById(boton.dataset.ninguno);
+      lista.querySelectorAll('input').forEach(function (i) { i.checked = false; });
+      actualizarConteo('usuario_id');
+    });
+  });
+  document.querySelectorAll('.lista-sel input[type=checkbox]').forEach(function (i) {
+    i.addEventListener('change', function () { actualizarConteo(i.name); });
+  });
+  actualizarConteo('curso_id');
+  actualizarConteo('usuario_id');
+</script>
+{% endblock %}

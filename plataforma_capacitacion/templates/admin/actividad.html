@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}Activity log{% endblock %}
+
+{% set etiquetas = {
+  'curso.crear': 'created the course',
+  'curso.editar': 'edited the course',
+  'curso.eliminar': 'deleted the course',
+  'curso.estado': 'changed the visibility of',
+  'curso.instructor_agregar': 'added an instructor to a course:',
+  'curso.instructor_quitar': 'removed an instructor from a course:',
+  'modulo.crear': 'added the module',
+  'modulo.editar': 'edited the module',
+  'modulo.eliminar': 'deleted the module',
+  'contenido.agregar': 'added material to',
+  'contenido.eliminar': 'removed material:',
+  'examen.crear': 'created the exam',
+  'examen.editar': 'edited the exam',
+  'examen.eliminar': 'deleted the exam',
+  'pregunta.agregar': 'added a question to',
+  'pregunta.eliminar': 'deleted a question from',
+  'usuario.crear': 'created the user',
+  'usuario.editar': 'edited the user',
+  'usuario.eliminar': 'deleted the user',
+  'usuario.estado': 'changed the status of',
+  'asignacion.crear': 'assigned training:',
+  'asignacion.eliminar': 'unenrolled',
+  'asignacion.reiniciar': 'reset the training of',
+  'certificado.importar': 'imported a record for',
+  'certificado.reenviar': 'resent the certificate of',
+  'config.guardar': 'changed the settings',
+  'plantilla.subir': 'uploaded a certificate template',
+  'curso.instructor_agregar': 'gave course access to',
+  'curso.instructor_quitar': 'removed course access from',
+  'contenido.agregar': 'added material to',
+  'contenido.eliminar': 'removed material:',
+  'material.terminar': 'finished the material',
+  'curso.iniciar': 'started the course',
+  'curso.terminar': 'completed the course',
+  'examen.presentar': 'took the exam',
+  'encuesta.enviar': 'rated the course',
+  'clave.cambiar': 'changed their password',
+  'sesion.entrar': 'signed in',
+  'sesion.salir': 'signed out',
+  'sesion.fallida': 'failed to sign in as',
+} %}
+
+{% block content %}
+<header>
+  <h1>Activity log</h1>
+  <p>What has been done in the platform, newest first. The last 400 entries.</p>
+</header>
+
+<div class="card">
+  <form method="get" class="fields">
+    <div><label for="q">Search</label>
+      <input id="q" name="q" type="search" value="{{ q }}" placeholder="Course, person, action…"></div>
+    <div><label for="tipo">Activity</label>
+      <select id="tipo" name="tipo">
+        <option value="" {{ 'selected' if not tipo }}>Everything</option>
+        <option value="learners" {{ 'selected' if tipo == 'learners' }}>Learners: courses and exams</option>
+        <option value="disen" {{ 'selected' if tipo == 'disen' }}>Course design</option>
+        <option value="gestion" {{ 'selected' if tipo == 'gestion' }}>Users and assignments</option>
+        <option value="sesion" {{ 'selected' if tipo == 'sesion' }}>Sign-ins</option>
+      </select></div>
+    <div><label for="usuario">Done by</label>
+      <select id="usuario" name="usuario">
+        <option value="">Anyone</option>
+        {% for p in personas %}
+          <option value="{{ p.id }}" {{ 'selected' if usuario == p.id | string }}>{{ p.nombre }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="row">
+      <button class="btn" type="submit">Filter</button>
+      <a class="btn secondary" href="{{ url_for('admin.actividad') }}">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>{{ total }} entr{{ 'y' if total == 1 else 'ies' }}</h2>
+  {% if dias %}
+    {% for dia, filas in dias %}
+      <div class="timeline-dia">
+        <h3>{{ 'Today' if dia == hoy else dia | fecha }}</h3>
+        <ul class="timeline">
+          {% for f in filas %}
+            <li>
+              <span class="tl-hora">{{ f.creado_en[11:16] }}</span>
+              <span class="tl-texto">
+                <strong>{{ f.usuario_nombre or 'System' }}</strong>
+                {{ etiquetas.get(f.accion, f.accion) }}
+                {% if f.objeto %}<em>{{ f.objeto }}</em>{% endif %}
+                {% if f.detalle %}<span class="tl-detalle">{{ f.detalle }}</span>{% endif %}
+              </span>
+              {% if f.ip %}<span class="tl-ip" title="Where it came from">{{ f.ip }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">{{ 'Nothing matches that filter.' if q or usuario else 'Nothing recorded yet.' }}</p>
+  {% endif %}
+</div>
+{% endblock %}
