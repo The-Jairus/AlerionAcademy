@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}{{ persona.nombre }}{% endblock %}
+
+{% block content %}
+<header>
+  <p><a href="{{ url_for('admin.usuarios') if user.rol == 'admin' else url_for('admin.asignaciones') }}">← Back</a></p>
+  <h1>{{ persona.nombre }}</h1>
+  <p class="hint">{{ persona.email }}{% if persona.cargo %} · {{ persona.cargo }}{% endif %}
+     · {{ persona.rol | capitalize }}
+     {% if not persona.activo %}· <span class="tag pendiente">Inactive</span>{% endif %}</p>
+</header>
+
+<div class="grid four" style="margin-bottom:12px">
+  <div class="stat"><b>{{ est.total }}</b><span>Assigned courses</span></div>
+  <div class="stat"><b style="color:var(--success)">{{ est.aprobados }}</b><span>Completed</span></div>
+  <div class="stat {{ 'alert' if est.pendientes }}"><b>{{ est.pendientes }}</b><span>Pending</span></div>
+  <div class="stat {{ 'alert' if est.vencidos }}"><b>{{ est.vencidos }}</b><span>Overdue</span></div>
+</div>
+<div class="grid four" style="margin-bottom:20px">
+  <div class="stat"><b>{{ est.cumplimiento }}%</b><span>Completion rate</span></div>
+  <div class="stat"><b>{{ est.promedio if est.promedio is not none else '—' }}</b><span>Average score</span></div>
+  <div class="stat"><b>{{ est.horas }}</b><span>Training hours done</span></div>
+  <div class="stat"><b>{{ est.certificados }}</b><span>Certificates</span></div>
+</div>
+
+<div class="card">
+  <h2>Assigned training</h2>
+  {% if filas %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Course</th><th>Assigned</th><th>Due</th><th>Completed</th>
+              <th class="num">Progress</th><th class="num">Score</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for f in filas %}
+            {% set a = f.a %}
+            <tr class="{{ 'pendiente' if f.vencido }}">
+              <td>
+                <a href="{{ url_for('admin.curso_detalle', curso_id=a.curso_id) }}">{{ a.curso }}</a>
+                {% if a.categoria %}<div style="color:var(--ink-soft);font-size:.82rem">{{ a.categoria }}</div>{% endif %}
+              </td>
+              <td>{{ a.asignado_en | fecha }}</td>
+              <td>
+                {% if a.fecha_limite %}
+                  {% if f.vencido %}<span class="tag danger">⚠ {{ a.fecha_limite | fecha }}</span>
+                  {% else %}{{ a.fecha_limite | fecha }}{% endif %}
+                {% else %}—{% endif %}
+              </td>
+              <td>{{ a.completado_en | fecha if a.completado_en else '—' }}</td>
+              <td class="num">{{ a.avance | round(0) | int }}%</td>
+              <td class="num">{{ a.puntaje | round(0) | int if a.puntaje is not none else '—' }}</td>
+              <td><span class="tag {{ a.estado }}">{{ estados.get(a.estado, a.estado) }}</span></td>
+              <td>
+                <div class="row" style="flex-wrap:nowrap">
+                  {% if a.certificado %}
+                    <a class="btn small gold"
+                       href="{{ url_for('admin.previsualizar_certificado', codigo=a.certificado, volver=request.path) }}">Certificate</a>
+                  {% endif %}
+                  <details class="menu">
+                    <summary class="btn small secondary">Options ▾</summary>
+                    <div class="menu-lista">
+                      <form method="post" action="{{ url_for('admin.reabrir_asignacion', asignacion_id=a.id) }}"
+                            onsubmit="return confirm('Reset “{{ a.curso }}” for {{ persona.nombre }}? They start again from the first module.')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn small secondary" type="submit">Reset their progress</button>
+                      </form>
+                      <hr>
+                      <form method="post" action="{{ url_for('admin.eliminar_asignacion', asignacion_id=a.id) }}"
+                            onsubmit="return confirm('Unenroll {{ persona.nombre }} from “{{ a.curso }}”?')">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn small danger" type="submit">Unenroll</button>
+                      </form>
+                    </div>
+                  </details>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">No training assigned to this person yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Certificates</h2>
+  {% if certificados %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Code</th><th>Course</th><th class="num">Score</th><th>Issued</th>
+                   <th>Expires</th><th></th></tr></thead>
+        <tbody>
+          {% for c in certificados %}
+            <tr>
+              <td><code>{{ c.codigo }}</code></td>
+              <td>{{ c.curso }}</td>
+              <td class="num">{{ c.puntaje | round(0) | int }}</td>
+              <td>{{ c.emitido_en | fecha }}</td>
+              <td>
+                {# Un anulado se queda en la ficha, pero no puede parecer vigente. #}
+                {% if c.anulado_en %}<span class="tag danger">Voided {{ c.anulado_en | fecha }}</span>
+                {% elif c.una_vez %}<span class="tag neutral">One time · no expiry</span>
+                {% elif not c.vence_en %}—
+                {% elif c.vencido %}<span class="tag danger">Expired {{ c.vence_en | fecha }}</span>
+                {% else %}{{ c.vence_en | fecha }}{% endif %}
+              </td>
+              <td>
+                {% if c.anulado_en %}
+                  <span class="hint">Voided when their progress was reset{{ ', by ' ~ c.anulado_por if c.anulado_por }}</span>
+                {% else %}
+                  <a class="btn small gold"
+                     href="{{ url_for('admin.previsualizar_certificado', codigo=c.codigo, volver=request.path) }}">Preview</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="empty">This person has no certificates yet.</p>
+  {% endif %}
+</div>
+{% endblock %}
