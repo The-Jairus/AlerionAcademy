@@ -1,0 +1,683 @@
+# Alerion Academy — plataforma de capacitación
+
+> La interfaz, los correos y los certificados están en inglés. Esta guía técnica
+> está en español para el equipo que administra el servidor.
+
+Aplicación web completa (frontend + backend + base de datos) para asignar capacitaciones,
+controlar que la gente vea el contenido, evaluarla y emitir el certificado por correo.
+
+Hecha con Flask y SQLite: no necesita servidor de base de datos ni servicios externos.
+
+---
+
+## 1. Instalación
+
+```bash
+cd plataforma_capacitacion
+python3 -m venv .venv && source .venv/bin/activate      # en Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+python seed.py            # datos de demostración (opcional pero recomendado la primera vez)
+python app.py
+```
+
+Abre <http://127.0.0.1:5000>.
+
+Requisitos del sistema:
+
+| Herramienta | Para qué | Obligatoria |
+|---|---|---|
+| Python 3.10+ | la aplicación | sí |
+| LibreOffice (`soffice`) | convertir `.pptx` a PDF al subir el curso | solo si subes presentaciones |
+| ffmpeg / ffprobe | medir la duración de los videos | solo si subes videos |
+
+Si no instalas LibreOffice puedes subir el material ya convertido a PDF.
+
+### Usuarios de la demostración
+
+| Rol | Usuario | Contraseña |
+|---|---|---|
+| Admin | admin@flyalerion.com | Admin123* |
+| Instructor | elena@flyalerion.com | Course123* |
+| Learner | james@flyalerion.com | Course123* |
+| Learner | diana@flyalerion.com | Course123* |
+| Learner | marcus@flyalerion.com | Course123* |
+
+`python seed.py --reiniciar` borra todo y vuelve a generar la demo.
+
+### Empezar de cero con los cursos
+
+Si la parte de cursos quedó inconsistente por una migración, `reiniciar.py` la reconstruye:
+
+```bash
+python reiniciar.py --cursos    # borra cursos, módulos, exámenes, asignaciones,
+                                # intentos, certificados y el material subido.
+                                # CONSERVA usuarios y configuración.
+python reiniciar.py --todo      # borra además usuarios: queda como recién instalada.
+```
+
+En el servidor: `docker compose exec app python reiniciar.py --cursos`.
+Las tablas no se vacían, se eliminan y se recrean desde el esquema actual, así que
+no queda ningún resto de versiones anteriores. Al final revisa la integridad y lo informa.
+Para arrancar con la base vacía: borra la carpeta `data/` y ejecuta `python app.py`; luego crea
+el primer administrador con `python crear_admin.py`.
+
+---
+
+## 2. Cómo funciona
+
+### Fechas y horas
+La base de datos guarda **siempre** en UTC. Eso no se toca: es lo que hace que un registro de
+cumplimiento sea comparable y que el cambio de hora no mueva nada hacia atrás.
+
+Lo que sí se elige es **cómo se lee**. En *Settings → Dates and times* hay una zona horaria de la
+organización (por defecto `America/Bogota`). Las fechas de vencimiento, los certificados, los
+correos y las marcas de "Last updated" se convierten a esa zona y se muestran **rotulados**
+(`19:41 -05`), para que nadie tenga que adivinar qué hora está leyendo.
+
+**El Activity log es la excepción: siempre va en UTC**, pase lo que pase con esa configuración, y
+cada hora lleva el rótulo `UTC` al lado. Un registro de auditoría tiene que decir lo mismo a quien
+lo lea desde Bogotá, desde Miami o desde una autoridad aeronáutica un año después; si dependiera de
+una preferencia de pantalla, dos personas podrían leer horas distintas del mismo hecho.
+
+Dos consecuencias prácticas:
+
+- Un vencimiento se compara contra *hoy donde está la organización*, no contra la fecha UTC. Antes,
+  a partir de las 7 de la noche en Colombia el sistema ya estaba en el día siguiente y marcaba
+  cursos como vencidos cinco horas antes de tiempo.
+- Cambiar la zona cambia lo que se lee, nunca lo que se guardó. Es reversible.
+
+Una fecha sin hora (la fecha límite de una asignación, por ejemplo) es un día del calendario, no un
+instante, y no se convierte: el 7 de noviembre es el 7 de noviembre en cualquier zona.
+
+### El Activity log y su descarga
+Además del buscador, del filtro por tipo y del de persona, hay un **rango de fechas** (*From* /
+*To*, en días UTC, igual que las horas que se muestran). Dejar uno de los dos vacío deja ese
+extremo abierto, y si se ponen al revés se enderezan solos en vez de devolver una lista vacía que
+parecería "no pasó nada".
+
+La pantalla sigue mostrando las **400 entradas más recientes** —es un timeline, no un archivo— pero
+ahora dice cuántas hay en total con ese filtro, y **Download CSV** se lleva *todas*, sin tope.
+
+El punto importante: la descarga **usa exactamente el mismo filtro que la pantalla**, porque ambos
+salen de la misma función (`_filtros_bitacora`). Tener dos juegos de filtros sería la forma segura
+de que un día dejen de coincidir y el archivo de auditoría no diga lo mismo que la pantalla desde
+la que se pidió. Las frases ("completed the course", "voided the certificate of") viven también en
+un solo sitio, en Python, por la misma razón.
+
+El CSV trae `Timestamp (UTC)`, `Date (UTC)`, `Time (UTC)`, `Who`, `Action`, `What happened`,
+`Object` y `Detail`, empieza con BOM para que Excel no parta los acentos, y se genera por trozos
+para no armarlo entero en memoria. **Cada descarga queda registrada** en el propio log, con quién
+la pidió y cuántas entradas se llevó.
+
+### Ingreso
+Usuario y contraseña contra la tabla `usuarios`. Las contraseñas se guardan con hash PBKDF2-SHA256
+(nunca en texto plano). Hay bloqueo temporal tras 8 intentos fallidos y protección CSRF en todos
+los formularios.
+
+### Roles
+La plataforma tiene tres roles:
+
+| Rol | Qué puede hacer |
+|---|---|
+| **Learner** | Ve y realiza los cursos que le asignaron, y descarga sus certificados. |
+| **Instructor** | Todo lo del learner, **más** crear cursos y exámenes. Edita y asigna **solo los cursos que él creó**: los ajenos no le aparecen en la lista y el servidor responde 403 si intenta abrirlos por URL. |
+| **Admin** | Todo lo anterior sobre **cualquier** curso, más usuarios, importación de registros, certificados y configuración. |
+
+El dueño de un curso queda guardado en `cursos.creado_por` cuando se crea. Al actualizar una base
+que venía de la versión anterior, los cursos existentes quedan a nombre del primer administrador y
+el rol `estudiante` pasa a llamarse `learner`.
+
+### Grupos
+En **Groups** se juntan personas para asignarles capacitación de una sola vez. Una persona puede
+estar en varios grupos (un piloto puede ser *Flight Ops* y *Dangerous Goods*), así que la
+pertenencia vive en su propia tabla y no en una columna de `usuarios`.
+
+Lo importante de cómo funciona: al asignar un curso a un grupo, **el grupo se resuelve a su gente
+en ese momento** y lo que queda guardado son asignaciones a personas. No se guarda "este curso es
+del grupo X". La diferencia se nota después:
+
+- Quien **entra** al grupo mañana no recibe el curso que se asignó ayer. Si se guardara la regla,
+  el curso le aparecería como asignado desde una fecha en la que ni estaba, y con su vencimiento
+  ya corriendo.
+- A quien **sale** del grupo no se le borra nada. Su avance, su nota y su certificado son suyos,
+  no del grupo.
+- **Borrar un grupo** no quita a nadie ni desasigna ningún curso. El grupo es un atajo para
+  asignar, no el dueño de nada.
+
+Un grupo no otorga permisos. Para eso está el rol.
+
+**Al asignar**, la columna *Who* se divide en dos: *By group* arriba y *By person* abajo. Los
+grupos son pastillas con el número de personas al lado, dentro de una zona con alto fijo que se
+desplaza por dentro, así que tener cincuenta grupos no empuja la lista de personas fuera de la
+pantalla; a partir de ocho aparece su propio buscador. Los grupos marcados se escriben en una
+línea fija encima de esa zona: si están abajo del todo y uno ha hecho scroll, se seguiría viendo
+qué se eligió en lugar de asignar a ciegas.
+
+El contador de arriba dice **personas únicas**, no la suma de los grupos. Si dos grupos comparten
+gente, "4 + 4" no son 8, y marcar a alguien que ya venía en un grupo no lo cuenta dos veces. El
+número que se ve es el de gente que va a recibir el curso.
+
+### Personal externo y proveedores
+Al crear o editar a alguien se puede marcar **External — works for a provider** y escribir el
+nombre del proveedor. El campo del proveedor solo aparece si la casilla está marcada, y al
+desmarcarla el proveedor **se borra**: si se quedara guardado, reaparecería al volver a marcar la
+casilla y un filtro por proveedor mostraría gente que ya no es de ese proveedor.
+
+El proveedor sale en la lista de usuarios, en la ficha de la persona y en el selector de
+asignaciones, se puede buscar por él, y la lista se puede filtrar por *Internal only* /
+*External only*. El campo ofrece los proveedores que ya existen, para que nadie escriba "SkyTech"
+y "Sky Tech" y acaben siendo dos.
+
+### Importar usuarios en bloque
+*Users → Import users from a file* acepta **CSV o Excel (.xlsx)**. Las columnas son `Name`,
+`Email`, `Job title`, `Role`, `Provider` y `Password`; solo las dos primeras son obligatorias.
+Los encabezados se reconocen en inglés y en español, y en CSV se detecta solo si el separador es
+coma o punto y coma (lo que produce Excel en configuración española). Hay un botón para descargar
+una plantilla con las columnas exactas.
+
+Antes de subir se elige si esa gente es **personal interno** o **de un proveedor**:
+
+- **Interno:** la columna `Provider` se ignora por completo y nadie queda marcado como externo.
+- **De un proveedor:** se usa el proveedor de cada fila; si una fila lo trae vacío, se usa el que
+  se escriba en el formulario. Si no hay ninguno de los dos, esa fila se rechaza.
+
+La casilla **Dry run** viene marcada: valida el archivo entero y lista los problemas fila por fila
+**sin crear a nadie**. Vale la pena dejarla la primera vez — crear cincuenta cuentas y descubrir
+después que la columna del rol venía mal no tiene vuelta atrás cómoda.
+
+Se rechaza, con el número de fila, lo que no se puede arreglar solo: falta el nombre, el correo no
+es un correo, el correo está repetido dentro del archivo, ya existe una cuenta con él, el rol no
+es uno de los tres, o la contraseña tiene menos de 8 caracteres. Las demás filas sí se crean: un
+archivo con un error no bloquea las noventa y nueve filas buenas. **A nadie que ya exista se le
+pisa nada.**
+
+Una fila sin contraseña recibe una aleatoria. Si además se desactiva el correo de bienvenida,
+nadie la conoce y esa gente necesitará un restablecimiento — el aviso al terminar lo dice.
+
+También se puede meter a todos los importados en uno o varios grupos de una vez, que es la forma
+rápida de pasar de un Excel de recursos humanos a gente con cursos asignados.
+
+### Vista de estudiante
+1. **Mis cursos** lista solo lo asignado a ese usuario, con su avance y fecha límite.
+2. **Los módulos se toman en orden.** El módulo 2 no se abre hasta terminar el 1, el 3 hasta
+   terminar el 2, y así. Los cerrados se ven en la lista con un candado y el botón *Locked*, para
+   que se sepa qué viene, pero no son enlaces. Un módulo ya aprobado se puede volver a abrir
+   cuantas veces se quiera, para repasar.
+
+   El bloqueo **no es solo de pantalla**. El servidor rechaza entrar al módulo por su URL, presentar
+   su examen, y servir su video o sus páginas; y `/api/authorize`, por donde Caddy pregunta antes de
+   entregar un video en producción, aplica la misma regla. Si se quitara únicamente el botón,
+   bastaría conocer la URL.
+3. **Contenido.** Si es video, se reproduce sin permitir adelantar: al saltar, la barra vuelve al
+   punto ya alcanzado. Si es documento, el PDF o PPTX se muestra **página por página como imagen**,
+   con un tiempo mínimo de lectura por página.
+4. **Examen bloqueado.** El botón solo se habilita cuando el material está completo (95 % del video
+   o la última página del documento). El bloqueo también se valida en el servidor: entrar a la URL
+   del examen a mano no funciona.
+5. **Certificado.** Al aprobar se genera el PDF y se envía al correo del usuario **con copia al
+   correo del administrador**. También queda disponible para descarga.
+
+### Cómo están ordenadas las pantallas
+Las pantallas crecieron hasta tener demasiadas opciones a la vista al mismo tiempo. El criterio
+ahora es: **abierto lo que se mira a diario, plegado lo que se usa de vez en cuando.**
+
+- Los formularios de alta (*Add user*, *Create course*, *Create exam*, *Assign training*, *Add
+  module*) son paneles plegados. La lista, que es a lo que uno entra, queda arriba.
+- *Settings* es un índice de siete paneles; cada uno guarda su propio botón de *Save settings*.
+- En la pantalla de un curso quedan abiertos los módulos; instructores, opiniones y los datos del
+  certificado se abren solo si se necesitan.
+- Las acciones de cada material y de cada módulo (renombrar, reemplazar, eliminar) viven en un menú
+  **Options ▾**. Lo que se usa todos los días —*Edit exam*, *Add material*— sigue a la vista.
+- **Reordenar se quedó con las flechas ↑ ↓**, no entró al menú. Mover algo de sitio es una acción
+  repetitiva y visual: dentro de un desplegable cuesta dos clics por cada movimiento y se pierde de
+  vista el orden que se está armando. La primera flecha hacia arriba y la última hacia abajo salen
+  deshabilitadas.
+
+La **barra lateral se queda quieta** mientras se baja por el contenido, con el nombre de la persona
+y *Sign out* siempre abajo a la vista. Es `position: sticky`, no `fixed`, para que siga ocupando su
+ancho en el layout y el contenido no necesite un margen de compensación. Si la pantalla es tan baja
+que el menú no cabe, se desplaza **solo el menú**: la marca arriba y la sesión abajo no se mueven,
+porque cortar el botón de salir por falta de alto sería peor que el problema que se quiso resolver.
+En pantalla angosta la barra pasa a ser una franja arriba, también pegada.
+
+Todo esto son elementos `<details>` del navegador: funcionan sin JavaScript, se pueden buscar con
+Ctrl+F y el teclado los abre con Enter. El JavaScript solo agrega dos comodidades: cerrar un menú
+al hacer clic fuera, y abrir el panel que contenga un campo inválido para que *Save* nunca falle en
+silencio.
+
+### Cursos y módulos
+Un curso es un contenedor: se crea primero y luego se le agregan los módulos que haga falta. Cada
+módulo tiene su propio material (video, PDF o PPTX) y su propio examen. El curso se aprueba, y el
+certificado se emite, solo cuando **todos** los módulos están aprobados. La nota del certificado es
+el promedio de la mejor nota de cada módulo.
+
+### Varios materiales en un módulo
+Un módulo puede llevar **los materiales que haga falta**: una presentación y un video, por ejemplo.
+Se recorren en el orden definido, y el examen no se desbloquea hasta que la persona terminó
+**todos**. El avance se guarda por material (`avance_contenidos`) y el del módulo es el promedio.
+
+Desde el curso, cada material se reordena con ↑↓, se renombra, se **reemplaza** por otro archivo
+y se quita. Reemplazar conserva su posición y su nombre, y reinicia el avance de quien ya lo había
+recorrido, porque lo que vio ya no es lo que hay. Si el archivo nuevo no se puede procesar, el
+material se queda como estaba. Un módulo no puede quedarse sin ninguno.
+
+Del lado del aprendiz, al terminar un material aparece el botón para pasar al siguiente —el próximo
+material, el próximo módulo o el cierre del curso, según corresponda— sin tener que recargar. El
+examen, en cambio, solo se abre cuando están **todos** los materiales del módulo. Al agregar material nuevo a un módulo que alguien ya había terminado, ese
+módulo vuelve a quedar incompleto para esa persona: el contenido que vio ya no es todo el contenido.
+
+### Preview del curso
+El botón **Preview as a learner**, en el curso, lo muestra tal como lo verá el aprendiz: los
+módulos en orden, cada material con su visor y el banco de preguntas de cada examen. No registra
+avance, no cuenta intentos y no emite certificados, así que revisar un curso no ensucia los
+reportes. En el preview se puede saltar entre páginas libremente; el aprendiz no.
+
+Un módulo puede llevar examen o no (ver más abajo). Dentro del curso, los módulos se reordenan con
+las flechas ↑↓ y cada examen viaja con su módulo: al mover el módulo se mueve también su examen. El botón **Edit module** cambia el título, la
+descripción y, si hace falta, reemplaza el material; al reemplazarlo se reinicia el avance de quienes
+ya lo habían recorrido, porque el contenido que vieron ya no es el mismo.
+
+### Cómo se cuenta el avance
+Un video se da por visto al 95% y un documento en su última página. En cuanto un material queda
+dado por visto, su avance marca **100%**, no el porcentaje crudo: si no, quien terminaba un video
+se quedaba con el curso en 99% para siempre. Lo mismo con el módulo y con el curso: terminado es
+100. Al actualizar, los registros que arrastraban ese decimal se corrigen solos.
+
+«Content progress» mide el material, no los exámenes: un curso puede estar al 100% de contenido y
+seguir sin aprobarse porque falta presentar un examen.
+
+### Vigencia y cursos de una sola vez
+Al crear o editar un curso se indica cada cuántos meses vence el certificado. La casilla
+**One-time course** bloquea ese campo: el curso se hace una vez, el certificado no lleva fecha de
+vencimiento y nunca aparece en el control de vencimientos de **Certificates**, que marca en rojo lo
+que ya caducó y tiene un filtro **Expired only**.
+
+### Cuándo se pinta de rojo un curso en la lista
+En **Courses** una fila se marca en rojo solo cuando el curso **no se puede tomar**:
+
+- no tiene módulos,
+- algún módulo no tiene material cargado,
+- o algún módulo tiene un examen asignado que todavía no tiene preguntas.
+
+**Un módulo sin examen no es un problema** y no pinta nada: el examen es opcional por diseño, y
+marcar el curso en rojo por eso convertía la lista en un semáforo que nadie podía apagar. La
+columna *Exams* ahora informa, en neutro, cuántos módulos llevan examen.
+
+### Reiniciar a alguien anula su certificado
+Cuando se reinicia el progreso de una persona que ya había terminado el curso (**Options → Reset
+their progress**), el certificado que tenía **se anula**: deja de valer desde ese momento.
+
+- La persona deja de verlo en su panel, en la página del curso y en *My account*, y tampoco lo
+  puede bajar con el enlace que hubiera guardado (el servidor responde 410).
+- La fila **no se borra**. Sigue en la ficha de la persona, rotulada *Voided* con la fecha y el
+  nombre de quien la anuló, y en **Certificates** bajo el filtro **Voided only**. Un certificado
+  anulado no se puede reenviar por correo.
+- Queda una entrada en el *Activity log*: "voided the certificate of …".
+- Cuando la persona vuelve a terminar el curso se emite **uno nuevo, con código nuevo**. El anulado
+  se queda como estaba.
+
+El razonamiento: dejar el certificado viejo a la vista mientras la persona repite la capacitación
+le dice que ya cumplió, que es justo lo contrario de reiniciarla. Y borrarlo perdería el hecho de
+que se emitió. Anularlo conserva las dos cosas: el registro y la verdad sobre su validez.
+
+### Exámenes: opcionales y reutilizables
+Un examen **existe por su cuenta**, con su propio banco de preguntas, y se gestiona en la pantalla
+**Exams**. Desde ahí se crea, se carga el banco y se ve en qué módulos se está usando.
+
+Al crear o editar un módulo, el campo **Exam** ofrece tres caminos:
+
+- **Sin examen**: recorrer el contenido completo basta para aprobar el módulo. Si ningún módulo del
+  curso tiene examen, al terminar el material el curso queda aprobado y el certificado se emite con
+  nota 100.
+- **Crear uno nuevo** para ese módulo.
+- **Reutilizar uno existente**: el mismo examen puede usarse en varios módulos, incluso de cursos
+  distintos. Comparten el banco de preguntas, así que editarlo los actualiza a todos; la pantalla
+  avisa cuando un examen está compartido.
+
+Borrar un módulo ya **no** borra su examen, y un examen que esté en uso no se puede borrar: primero
+hay que desengancharlo de los módulos que lo usan.
+
+En la configuración de cada examen se define cuántas preguntas ve la persona en cada intento
+(0 = todas) y si se mezclan. Con la mezcla activa, cada intento saca preguntas distintas y en
+distinto orden, y las opciones también se barajan sin perder cuál es la correcta. Las preguntas del
+banco se reordenan con ↑↓ y su enunciado se puede corregir sin volver a crearlas.
+
+### Certificado firmado o sin firma
+Cada curso define qué tipo de certificado emite, y de ahí salen las dos plantillas base:
+
+- **Sin firma**: no lleva bloque de firma. El sello queda centrado y el pie aclara que se emitió
+  electrónicamente y no requiere firma.
+- **Firmado**: se pide el nombre, el cargo y la imagen de la firma de quien firma. La imagen se
+  recorta y se optimiza al subirla (PNG con fondo transparente es lo que mejor queda) y se imprime
+  sobre la línea de firma.
+
+El firmante configurado en **Settings** quedó como respaldo: solo se usa si un curso firmado dejó
+esos campos en blanco.
+
+El certificado ya **no imprime el número de documento ni la duración del curso**. El campo `horas`
+se sigue guardando en la base por si más adelante lo exige la regulación.
+
+Al pie, los dos diseños llevan una sola línea fija (`certificados.PIE_CERTIFICADO`):
+
+> Official Electronic Certificate | Issued by Alerion Academy. Authenticity and completion records
+> are maintained digitally within the Alerion LMS.
+
+No se imprimen ni la fecha de emisión, ni la vigencia, ni la leyenda de verificación: el código
+único ya va dentro del sello, y la fecha de ejecución aparece en el cuerpo del certificado.
+
+### Plantilla del certificado
+En **Settings → Certificate design** se puede seguir usando el diseño incluido o subir la plantilla
+aprobada por la empresa en Word, PowerPoint u ODF. La plataforma reemplaza los marcadores
+(`{{NAME}}`, `{{COURSE}}`, `{{DATE}}`, `{{SCORE}}`, `{{CODE}}` y demás; `{{DATE}}` es la
+fecha de ejecución del curso en formato mm/dd/yyyy, y `{{SIGNER}}` queda en blanco si el curso
+emite certificado sin firma) y la convierte a PDF con
+LibreOffice. El botón **Download a sample** genera un certificado de prueba para revisar el resultado
+antes de usarlo. Si la plantilla falla, el sistema vuelve solo al diseño incluido para no dejar a
+nadie sin certificado.
+
+### Importación de registros anteriores
+**Import records** carga capacitaciones hechas antes de la plataforma. Se puede importar de a uno,
+adjuntando el PDF del certificado original, o en bloque con un CSV (`email,course,date,score,code`).
+Los registros importados cuentan en el training summary igual que los ejecutados en la plataforma.
+
+### Identidad visual
+Los archivos de marca están en `static/img/`: `logo.png` (barra lateral y pantalla de ingreso),
+`mark.png` (marca de agua), `certificate_logo.png` y `certificate_mark.png` (certificado) y
+`favicon.png`. Los colores viven en el bloque de variables al inicio de `static/css/app.css` y se
+repiten como `NAVY` y `GOLD` en `certificados.py`.
+
+### Quién puede editar un curso
+Además de quien lo creó, se pueden agregar **otros instructores** desde el propio curso, en *Who
+can edit this course*. Quedan guardados en `curso_instructores` y pueden editarlo y asignarlo igual
+que el dueño. El dueño no se puede quitar.
+
+Cada curso guarda **cuándo se modificó por última vez y quién lo hizo**, y eso se ve en la lista de
+cursos y en el encabezado del curso.
+
+### Encuesta de satisfacción
+Al terminar un curso, la persona ve una encuesta de una a cinco estrellas con un comentario
+opcional. Cada respuesta se le manda por correo al instructor del curso (y a los instructores
+adicionales, y al administrador), y se acumula en el propio curso, con el promedio.
+
+### Bitácora
+**Activity log**, solo para el administrador, registra **todo lo que hacen los tres roles**: quién,
+qué y cuándo. Se agrupa por día y se filtra por texto, por persona o por tipo de actividad.
+
+**No guarda la dirección de red de nadie.** Para auditar basta con saber quién hizo qué; rastrear
+desde dónde se conecta cada empleado es otra cosa. La columna `bitacora.ip` existió en una versión
+anterior: al actualizar se vacía sola y no se vuelve a escribir.
+
+Qué queda registrado:
+
+- **Aprendices**: entrar y salir, empezar un curso, terminar cada material, presentar un examen
+  (con la nota y si pasó), terminar el curso, responder la encuesta y cambiar su contraseña.
+- **Instructores y administradores**: crear y editar cursos, módulos y materiales, reordenarlos,
+  crear y editar exámenes y preguntas, asignar y desmatricular, reiniciar la capacitación de
+  alguien, dar o quitar acceso a un curso, crear y editar usuarios, importar registros, cambiar la
+  configuración y reenviar certificados.
+- **Intentos fallidos de ingreso**, con el correo que se usó. Es lo primero que se mira si alguien
+  reporta que no puede entrar o si hay algo raro.
+
+Para que no se escape nada, `app.py` tiene una red de seguridad: cualquier petición que cambie
+datos y no haya dejado su propia entrada, deja una genérica con el nombre de la ruta. Los avisos de
+avance del visor (que llegan cada pocos segundos mientras alguien ve un video) están excluidos a
+propósito: inundarían el registro y ya quedan resumidos en *empezó el curso* y *terminó el
+material*.
+
+El nombre de quien actuó se guarda como copia, para que el registro siga siendo legible aunque
+después se borre esa cuenta. Los intentos fallidos de ingreso guardan el correo que se escribió,
+que es el dato que sirve para resolver el problema.
+
+### Ficha de una persona
+Al hacer clic en un nombre, en **Users** o en **Assignments**, se abre su ficha: estadísticas
+(cursos asignados, completados, pendientes, vencidos, cumplimiento, nota promedio, horas y
+certificados), la lista de lo que tiene asignado con su estado, y sus certificados. Desde ahí, y
+desde Assignments, se puede **previsualizar el certificado** (con descargar y cancelar),
+**reiniciar** el curso de esa persona para que empiece de cero, y **desmatricularla**.
+
+### Vista de administrador
+Un instructor ve estas mismas pantallas, pero limitadas a sus cursos, y sin Usuarios, Importación,
+Certificados, Bitácora ni Configuración.
+
+- **Panel**: indicadores, sus propios cursos pendientes, vencidos y últimos certificados.
+- **Usuarios**: crear, editar, cambiar contraseña, activar/desactivar y eliminar. Se elige el rol
+  entre Learner, Instructor y Admin.
+- **Cursos**: crear subiendo el material (video, PDF, PPTX, ODP), editar, ocultar y eliminar,
+  con el tipo de certificado y la vigencia del curso.
+- **Asignar cursos**: varios cursos a varias personas de una vez, eligiendo con casillas y buscador
+  (sin Ctrl+clic), con fecha límite y aviso por correo. Lo asignado se agrupa por curso, con las
+  fechas de asignación, vencimiento y ejecución de cada persona, y lo vencido marcado en rojo.
+- **Exámenes**: biblioteca de exámenes reutilizables, con puntaje mínimo, intentos, preguntas por
+  intento y banco de preguntas de selección única.
+- **Resumen de capacitaciones**: todo lo asignado con filtros; lo pendiente aparece en rojo pastel
+  y lo aprobado en blanco.
+- **Certificados**: buscador por persona (nombre o correo) y por curso, con la fecha de vencimiento
+  de cada uno, descarga del PDF y reenvío por correo.
+- **Configuración**: datos que salen en el certificado y servidor SMTP.
+
+---
+
+## 3. Correo
+
+### Los cuatro correos que salen solos
+
+| Correo | Cuándo sale | Qué lleva |
+|---|---|---|
+| **Bienvenida** | Al crear la cuenta en **Users** | Usuario, contraseña temporal y los pasos para cambiarla |
+| **Curso asignado** | Al asignar en **Assignments** | Qué cursos, la fecha límite y el enlace directo a la plataforma |
+| **Vencidos** | Una vez al día, por cron | Todo lo que la persona tiene pasado de fecha, en un solo correo |
+| **Certificado** | Al aprobar un curso | El PDF adjunto, con copia al administrador |
+
+Los tres primeros se encienden y apagan en **Settings → Automatic emails**. Los dos primeros además
+traen una casilla en su propio formulario, por si en un caso puntual no quieres avisar.
+
+Todos los enlaces salen de **Settings → Platform address**. Si ese campo está mal, los correos
+llegan con enlaces rotos: tiene que ser la dirección pública, con `https://`.
+
+### Recordatorio diario de vencidos
+
+`recordatorios.py` busca las asignaciones cuya fecha límite ya pasó y que la persona todavía no
+aprueba, y manda **un correo por persona** con todo lo que debe, nunca uno por curso. No le escribe
+a cuentas inactivas ni sobre cursos ocultos, y si se ejecuta dos veces el mismo día la segunda no
+envía nada: antes de escribir revisa en la tabla `correos` si esa persona ya recibió el recordatorio
+de hoy.
+
+Probar sin enviar nada:
+
+```bash
+docker compose exec -T app python recordatorios.py --probar
+```
+
+Programarlo (una sola vez, en el servidor):
+
+```bash
+cd /root/AlerionAcademy/plataforma_capacitacion
+chmod +x despliegue/recordatorios.sh
+(crontab -l 2>/dev/null; echo "0 13 * * 1-5 /root/AlerionAcademy/plataforma_capacitacion/despliegue/recordatorios.sh >> /var/log/alerion-recordatorios.log 2>&1") | crontab -
+```
+
+El servidor trabaja en UTC: `13:00` UTC son las 8:00 de la mañana en Colombia. `1-5` lo limita a
+días hábiles.
+
+### Por dónde sale el correo
+
+En **Settings → How mail is sent** se elige entre dos caminos:
+
+**Microsoft Graph (HTTPS, puerto 443).** Es el recomendado si la empresa usa Microsoft 365. Envía
+por HTTPS, que ningún proveedor bloquea, no guarda contraseñas y no le afecta el retiro de la
+autenticación básica que Microsoft tiene en marcha. Necesita tres datos que da el administrador de
+Microsoft 365 tras registrar una aplicación en Entra ID con permiso de aplicación `Mail.Send`:
+*Directory (tenant) ID*, *Application (client) ID* y un *client secret*. Más el buzón desde el que
+se envía.
+
+**SMTP.** El de toda la vida: servidor, puerto, usuario y contraseña. Funciona con cualquier
+proveedor, pero **muchos servidores bloquean los puertos de salida 25, 465 y 587**; DigitalOcean
+entre ellos. Para comprobarlo desde el servidor:
+
+```bash
+timeout 5 bash -c 'cat < /dev/null > /dev/tcp/smtp.office365.com/587' && echo abierto || echo bloqueado
+```
+
+Si están bloqueados, SMTP no es una opción desde esa máquina y hay que usar Graph.
+
+Mientras no haya ninguno de los dos configurado, cada mensaje se guarda como archivo `.eml` en
+`data/correos_salida/`. Sirve para probar el flujo completo sin servidor de correo: nadie recibe
+nada, pero puedes abrir los archivos y ver exactamente qué se habría enviado.
+
+Todos los envíos, con su resultado y el error exacto si falló, quedan listados al final de la
+página de configuración. El botón **Send test** verifica la configuración antes de depender de ella.
+
+---
+
+## 4. Estructura
+
+```
+app.py              arranque, CSRF, filtros y manejo de errores
+auth.py             ingreso, sesión, roles
+estudiante.py       cursos asignados, visor, control de avance, examen, certificado
+administrador.py    usuarios, cursos, asignaciones, exámenes, reportes, configuración
+media.py            procesa el material: pptx→pdf→imágenes, duración de video
+certificados.py     genera el PDF del certificado
+mailer.py           envío SMTP o bandeja local
+database.py         esquema SQLite y utilidades
+seed.py             datos de demostración
+templates/          páginas HTML
+static/             CSS y JavaScript del visor
+data/               base de datos, material, certificados y correos (se crea sola)
+```
+
+Tablas: `usuarios`, `cursos`, `asignaciones`, `quices`, `preguntas`, `opciones`, `intentos`,
+`certificados`, `configuracion`, `correos`.
+
+Estados de una asignación: `pendiente` → `en_progreso` → `aprobado` o `reprobado`.
+
+---
+
+## 5. Puesta en producción
+
+Para publicarla en tu dominio (`https://capacitacion.tuempresa.com`) sigue
+**[despliegue/GUIA_DESPLIEGUE.md](despliegue/GUIA_DESPLIEGUE.md)**. Trae tres caminos: un servicio
+que la ejecuta por ti, un servidor propio con Docker y HTTPS automático, o un servidor propio con
+Nginx instalado por script. Los archivos ya vienen listos: `Dockerfile`, `docker-compose.yml`,
+`render.yaml` y la carpeta `despliegue/`.
+
+`python app.py` levanta el servidor de desarrollo de Flask, suficiente para probar en tu
+computador. Para uso real siempre va detrás de gunicorn y de Nginx o Caddy, como indica la guía.
+Tres cosas por hacer antes de exponerlo:
+
+1. **HTTPS obligatorio.** Con TLS activo, define la variable de entorno `HTTPS=1` para que la
+   cookie de sesión solo viaje cifrada.
+2. **Llave de sesión.** Se genera sola en `data/secret.key`; si prefieres, define la variable de
+   entorno `SECRET_KEY`.
+3. **Respaldos.** Copia la carpeta `data/` completa: ahí están la base, el material y los
+   certificados emitidos.
+
+Ajustes de reglas en `config.py`: `PORCENTAJE_MIN_VIDEO`, `SEGUNDOS_MIN_POR_PAGINA`,
+`SALTO_MAX_SEGUNDOS` y el tamaño máximo de archivo.
+
+### Capacidad y rendimiento
+
+El material pesado (video) lo entrega **Caddy**, no la aplicación. Antes de servir un archivo,
+Caddy consulta `/api/authorize`, donde la aplicación confirma en milisegundos si esa persona tiene
+el curso asignado. Así el número de personas viendo video a la vez depende del ancho de banda y no
+de los procesos de la aplicación.
+
+- `MEDIA_DIRECT=1` activa ese reparto (ya viene puesto en `docker-compose.yml`).
+- Sin esa variable, la aplicación sirve el video como antes: útil al desarrollar en local.
+- `WORKERS` y `THREADS` en `.env` ajustan la concurrencia. Con 2 GB de RAM, 4 × 4 va cómodo;
+  con 4 GB puedes subir a 6 × 4.
+
+Referencias de tamaño: un documento de 30 páginas ocupa unos 15 MB ya convertido a imágenes, y un
+video de 10 minutos en 720p unos 100 MB. En 50 GB caben del orden de 400 videos de esa duración.
+La base de datos es despreciable: 1 KB por usuario.
+
+### Optimización del almacenamiento
+
+El disco es lo que marca el precio del servidor, así que todo lo que entra se comprime:
+
+| | Antes | Ahora |
+|---|---|---|
+| Página de documento | ~63 KB (PNG) | ~15 KB (WebP) |
+| Video subido | tal cual | recomprimido a 720p H.264 |
+| Archivo fuente (PDF/PPTX) | se guardaba | se borra tras renderizar |
+
+La recompresión del video **no ocurre durante la subida**: el módulo queda listo de inmediato con
+el archivo original y un proceso en segundo plano lo comprime unos minutos después, actualizando
+solo el nombre del archivo. Así una subida grande no bloquea la plataforma ni expira. ffmpeg corre
+con un hilo y prioridad baja, para no acaparar la CPU en servidores de un solo núcleo.
+
+> Si el dominio pasa por el proxy de Cloudflare (nube naranja), las subidas fallan con error 524:
+> Cloudflare corta a los 100 segundos y limita el archivo a 100 MB en el plan gratuito. Deja los
+> registros A en **DNS only** (nube gris).
+
+En material real esto libera alrededor de la mitad del espacio. Los parámetros están al
+inicio de `media.py`: `RESOLUCION_VIDEO`, `CRF_VIDEO`, `ESCALA_PAGINA` y `CALIDAD_WEBP`.
+Subir `CRF_VIDEO` a 30 o bajar `ESCALA_PAGINA` a 1.4 reduce más, con algo menos de nitidez.
+
+Para el material que ya estaba subido:
+
+```bash
+docker compose exec app python optimizar.py --revisar    # cuánto se ahorraría
+docker compose exec app python optimizar.py --aplicar    # aplicarlo
+```
+
+Ese script también borra las carpetas de material que quedaron sin curso asociado.
+
+### Despliegue automático desde GitHub
+
+`.github/workflows/deploy.yml` actualiza el servidor en cada push a `main`: respalda,
+hace `git reset --hard`, reconstruye y comprueba que la aplicación responda. En GitHub,
+**Settings → Secrets and variables → Actions**, define `SSH_HOST`, `SSH_USER`, `SSH_KEY`
+(clave privada) y `APP_PATH`. En el servidor:
+
+```bash
+ssh-keygen -t ed25519 -C "github-deploy" -f ~/.ssh/github_deploy -N ""
+cat ~/.ssh/github_deploy.pub >> ~/.ssh/authorized_keys
+cat ~/.ssh/github_deploy      # el contenido va en el secreto SSH_KEY
+```
+
+### Respaldos
+
+`despliegue/respaldo.sh` copia base, material y certificados, y conserva los últimos 14 días:
+
+```bash
+chmod +x despliegue/respaldo.sh
+(crontab -l 2>/dev/null; echo "15 3 * * * /root/AlerionAcademy/plataforma_capacitacion/despliegue/respaldo.sh") | crontab -
+```
+
+### Sobre la protección del material
+Las presentaciones y PDF se entregan como imágenes página por página, así que no se pueden editar
+ni descargar el archivo original desde el visor. El video se sirve en streaming con el menú de
+descarga desactivado. Ninguna plataforma web puede impedir del todo que alguien grabe la pantalla:
+para material altamente confidencial se necesita DRM, que no está incluido aquí.
+
+
+---
+
+## 6. Identidad visual
+
+Todos los colores corporativos están en un solo bloque, al inicio de
+`static/css/app.css`:
+
+```css
+--brand-ink:  #0e1a28;   /* azul marino: barra lateral, títulos, certificado */
+--brand-gold: #c6a15b;   /* dorado: estado activo, sellos, botones destacados */
+```
+
+Cambia esos valores y toda la plataforma se actualiza. Los mismos dos colores están
+declarados como `NAVY` y `GOLD` al inicio de `certificados.py`, para que el PDF quede igual.
+
+### Logos
+
+| Archivo | Dónde aparece | Recomendación |
+|---|---|---|
+| `static/img/logo.png` | barra lateral y pantalla de ingreso | PNG con fondo transparente, versión clara, alto ≥ 60 px |
+| `static/img/certificate_logo.png` | encabezado del certificado PDF | PNG con fondo transparente, versión oscura, alto ≥ 300 px |
+| `static/img/favicon.png` | pestaña del navegador | PNG cuadrado de 64×64 px |
+
+Si un archivo no existe, la plataforma no se rompe: muestra el nombre en texto.
+Para subirlos al servidor basta con dejarlos en esas rutas y reconstruir con
+`docker compose up -d --build`.
+
+El nombre que aparece en la barra lateral, en los certificados y en los correos se
+edita desde **Settings**, sin tocar el código.

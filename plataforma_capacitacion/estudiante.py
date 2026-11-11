@@ -1,0 +1,699 @@
+"""Student view: assigned courses, modules, material, exams and certificate."""
+import json
+import random
+import time
+
+from flask import (Blueprint, abort, flash, jsonify, redirect, render_template,
+                   request, send_file, session, url_for)
+
+import certificados as cert
+import config
+import mailer
+import media
+from auth import login_requerido, registrar, usuario_actual
+from database import ahora, consultar, ejecutar, hoy_local, obtener_config
+
+bp = Blueprint("estudiante", __name__)
+
+SQL_ASIGNACION = """
+SELECT a.*, c.titulo, c.descripcion, c.categoria, c.horas, c.vigencia_meses
+FROM asignaciones a
+JOIN cursos c ON c.id = a.curso_id
+"""
+
+
+# --------------------------------------------------------------------------- helpers
+def _asignacion(asignacion_id, usuario_id):
+    fila = consultar(SQL_ASIGNACION + " WHERE a.id = ? AND a.usuario_id = ?",
+                     (asignacion_id, usuario_id), uno=True)
+    if fila is None:
+        abort(404)
+    return fila
+
+
+def contenidos_con_avance(asignacion_id, modulo_id):
+    """Materiales del módulo, en orden, cada uno con el avance de esta persona."""
+    filas = consultar("SELECT * FROM contenidos WHERE modulo_id = ? ORDER BY orden, id",
+                      (modulo_id,))
+    resultado = []
+    for fila in filas:
+        avance = consultar(
+            "SELECT * FROM avance_contenidos WHERE asignacion_id = ? AND contenido_id = ?",
+            (asignacion_id, fila["id"]), uno=True)
+        if avance is None:
+            ejecutar("INSERT OR IGNORE INTO avance_contenidos (asignacion_id, contenido_id)"
+                     " VALUES (?, ?)", (asignacion_id, fila["id"]))
+            avance = consultar(
+                "SELECT * FROM avance_contenidos WHERE asignacion_id = ? AND contenido_id = ?",
+                (asignacion_id, fila["id"]), uno=True)
+        resultado.append({"c": fila, "avance": avance,
+                          "completo": bool(avance["completo"])})
+    return resultado
+
+
+def _sincronizar_modulo(asignacion_id, modulo_id, contenidos):
+    """Reduce el avance de los contenidos a un solo número para el módulo.
+
+    El módulo está completo cuando lo están todos sus materiales, y su avance es
+    el promedio. Así el examen sigue bloqueado hasta que se recorrió todo.
+    """
+    if not contenidos:
+        porcentaje, completo = 0.0, False
+    else:
+        completo = all(c["completo"] for c in contenidos)
+        porcentaje = (100.0 if completo
+                      else sum(c["avance"]["avance"] for c in contenidos) / len(contenidos))
+
+    actual = consultar(
+        "SELECT * FROM avance_modulos WHERE asignacion_id = ? AND modulo_id = ?",
+        (asignacion_id, modulo_id), uno=True)
+    if actual is None:
+        ejecutar("INSERT OR IGNORE INTO avance_modulos (asignacion_id, modulo_id)"
+                 " VALUES (?, ?)", (asignacion_id, modulo_id))
+        actual = consultar(
+            "SELECT * FROM avance_modulos WHERE asignacion_id = ? AND modulo_id = ?",
+            (asignacion_id, modulo_id), uno=True)
+
+    estado = actual["estado"]
+    if estado == "pendiente" and porcentaje > 0:
+        estado = "en_progreso"
+    ejecutar("UPDATE avance_modulos SET avance = ?, material_completo = ?, estado = ?"
+             " WHERE id = ?",
+             (round(porcentaje, 2), int(completo), estado, actual["id"]))
+    return consultar("SELECT * FROM avance_modulos WHERE id = ?", (actual["id"],), uno=True)
+
+
+def modulos_con_avance(asignacion_id, curso_id):
+    """Módulos del curso, cada uno con sus contenidos, su avance y sus intentos."""
+    modulos = consultar(
+        "SELECT m.*, q.titulo AS quiz_titulo, q.puntaje_minimo,"
+        " q.intentos_max, q.preguntas_por_intento, q.mezclar,"
+        " (SELECT COUNT(*) FROM preguntas p WHERE p.quiz_id = q.id) AS banco"
+        " FROM modulos m LEFT JOIN quices q ON q.id = m.quiz_id"
+        " WHERE m.curso_id = ? ORDER BY m.orden, m.id", (curso_id,))
+
+    resultado = []
+    for modulo in modulos:
+        contenidos = contenidos_con_avance(asignacion_id, modulo["id"])
+        avance = _sincronizar_modulo(asignacion_id, modulo["id"], contenidos)
+        intentos = consultar(
+            "SELECT * FROM intentos WHERE asignacion_id = ? AND modulo_id = ?"
+            " ORDER BY finalizado_en DESC", (asignacion_id, modulo["id"]))
+
+        # Sin examen, terminar el contenido es aprobar el módulo. Se graba para
+        # que el avance guardado y lo que se ve en pantalla digan lo mismo.
+        if (modulo["quiz_id"] is None and avance["material_completo"]
+                and avance["estado"] != "aprobado"):
+            ejecutar("UPDATE avance_modulos SET estado = 'aprobado', completado_en = ?"
+                     " WHERE id = ?", (avance["completado_en"] or ahora(), avance["id"]))
+            avance = consultar("SELECT * FROM avance_modulos WHERE id = ?",
+                               (avance["id"],), uno=True)
+
+        resultado.append({
+            "m": modulo,
+            "contenidos": contenidos,
+            "avance": avance,
+            "intentos": intentos,
+            "aprobado": avance["estado"] == "aprobado",
+            "mejor": max([i["puntaje"] for i in intentos], default=None),
+        })
+
+    # El curso es secuencial: un módulo se abre cuando los anteriores están
+    # aprobados. Antes se podía entrar a cualquiera desde la lista, y el
+    # material está escrito para leerse en orden. Los ya aprobados quedan
+    # abiertos para repasar.
+    abiertos = True
+    for bloque in resultado:
+        bloque["abierto"] = abiertos or bloque["aprobado"]
+        abiertos = abiertos and bloque["aprobado"]
+    return resultado
+
+
+def _modulo_abierto(bloque):
+    """Si no está abierto, se devuelve a la lista con el motivo."""
+    if bloque["abierto"]:
+        return True
+    flash("Modules are taken in order. Finish the previous one first.", "error")
+    return False
+
+
+def recalcular_curso(asignacion_id, curso_id):
+    """Actualiza el estado global del curso a partir de sus módulos."""
+    modulos = modulos_con_avance(asignacion_id, curso_id)
+    if not modulos:
+        return False
+    listo = all(
+        m["aprobado"] if m["m"]["quiz_id"] else m["avance"]["material_completo"]
+        for m in modulos)
+    # Curso terminado es 100%, sin decimales arrastrados de los videos.
+    total = (100.0 if listo
+             else sum(m["avance"]["avance"] for m in modulos) / len(modulos))
+    # Un módulo sin examen nunca queda reprobado.
+    reprobado = any(m["avance"]["estado"] == "reprobado" for m in modulos)
+
+    estado = "aprobado" if listo else ("reprobado" if reprobado
+                                       else ("en_progreso" if total > 0 else "pendiente"))
+    actual = consultar("SELECT * FROM asignaciones WHERE id = ?", (asignacion_id,), uno=True)
+    ejecutar("UPDATE asignaciones SET avance = ?, estado = ?, completado_en = ? WHERE id = ?",
+             (round(total, 2), estado,
+              actual["completado_en"] or (ahora() if listo else None), asignacion_id))
+    return listo and actual["estado"] != "aprobado"
+
+
+# --------------------------------------------------------------------------- panel
+@bp.route("/my-training")
+@login_requerido
+def panel():
+    usuario = usuario_actual()
+    asignaciones = consultar(
+        SQL_ASIGNACION + " WHERE a.usuario_id = ? AND c.activo = 1"
+        " ORDER BY CASE a.estado WHEN 'aprobado' THEN 1 ELSE 0 END,"
+        " a.fecha_limite IS NULL, a.fecha_limite, a.asignado_en DESC",
+        (usuario["id"],))
+    conteo = {
+        fila["curso_id"]: fila["n"] for fila in consultar(
+            "SELECT curso_id, COUNT(*) AS n FROM modulos GROUP BY curso_id")
+    }
+    # Solo los vigentes: un certificado anulado (le reiniciaron el curso) no
+    # debe seguir diciéndole a la persona que ya cumplió.
+    certificados_usuario = {
+        fila["curso_id"]: fila for fila in consultar(
+            "SELECT * FROM certificados WHERE usuario_id = ? AND anulado_en IS NULL",
+            (usuario["id"],))
+    }
+    pendientes = [a for a in asignaciones if a["estado"] != "aprobado"]
+    return render_template("estudiante/panel.html", asignaciones=asignaciones,
+                           certificados=certificados_usuario, pendientes=len(pendientes),
+                           modulos_por_curso=conteo, hoy=hoy_local())
+
+
+@bp.route("/course/<int:asignacion_id>")
+@login_requerido
+def curso(asignacion_id):
+    usuario = usuario_actual()
+    asignacion = _asignacion(asignacion_id, usuario["id"])
+    modulos = modulos_con_avance(asignacion_id, asignacion["curso_id"])
+    recalcular_curso(asignacion_id, asignacion["curso_id"])
+    asignacion = _asignacion(asignacion_id, usuario["id"])
+    certificado = consultar(
+        "SELECT * FROM certificados WHERE usuario_id = ? AND curso_id = ?"
+        " AND anulado_en IS NULL ORDER BY id DESC",
+        (usuario["id"], asignacion["curso_id"]), uno=True)
+    encuesta_previa = consultar("SELECT * FROM encuestas WHERE asignacion_id = ?",
+                                (asignacion_id,), uno=True)
+    return render_template("estudiante/curso.html", a=asignacion, modulos=modulos,
+                           certificado=certificado, encuesta=encuesta_previa)
+
+
+@bp.route("/course/<int:asignacion_id>/module/<int:modulo_id>")
+@login_requerido
+def modulo(asignacion_id, modulo_id):
+    """Un material a la vez. `parte` dice cuál: por defecto, el primero sin terminar."""
+    usuario = usuario_actual()
+    asignacion = _asignacion(asignacion_id, usuario["id"])
+    modulos = modulos_con_avance(asignacion_id, asignacion["curso_id"])
+    actual = next((m for m in modulos if m["m"]["id"] == modulo_id), None)
+    if actual is None:
+        abort(404)
+    if not _modulo_abierto(actual):
+        return redirect(url_for("estudiante.curso", asignacion_id=asignacion_id))
+    posicion = [m["m"]["id"] for m in modulos].index(modulo_id)
+
+    contenidos = actual["contenidos"]
+    if not contenidos:
+        return render_template("estudiante/modulo.html", a=asignacion, bloque=actual,
+                               modulos=modulos, posicion=posicion, parte=None, indice=0,
+                               minimo_video=config.PORCENTAJE_MIN_VIDEO,
+                               segundos_pagina=config.SEGUNDOS_MIN_POR_PAGINA)
+
+    pedido = request.args.get("parte")
+    indice = None
+    if pedido and pedido.isdigit():
+        pedido = int(pedido)
+        indice = next((i for i, c in enumerate(contenidos) if c["c"]["id"] == pedido), None)
+    if indice is None:
+        # El primero sin terminar; si están todos listos, el último visto.
+        indice = next((i for i, c in enumerate(contenidos) if not c["completo"]),
+                      len(contenidos) - 1)
+    # No se puede saltar a un material si los anteriores siguen sin terminar.
+    primero_pendiente = next((i for i, c in enumerate(contenidos) if not c["completo"]),
+                             len(contenidos) - 1)
+    indice = min(indice, primero_pendiente)
+
+    parte = contenidos[indice]
+    return render_template("estudiante/modulo.html", a=asignacion, bloque=actual,
+                           modulos=modulos, posicion=posicion, parte=parte, indice=indice,
+                           video_src=url_video(asignacion_id, parte["c"]),
+                           minimo_video=config.PORCENTAJE_MIN_VIDEO,
+                           segundos_pagina=config.SEGUNDOS_MIN_POR_PAGINA)
+
+
+def url_video(asignacion_id, contenido):
+    """URL del video: la sirve Caddy si está activado, si no la aplicación."""
+    if config.MEDIA_DIRECTO and contenido["carpeta"] and contenido["archivo"]:
+        return f"{config.MEDIA_PREFIJO}/materiales/{contenido['carpeta']}/{contenido['archivo']}"
+    return url_for("estudiante.video", asignacion_id=asignacion_id,
+                   contenido_id=contenido["id"])
+
+
+# --------------------------------------------------------------------------- material
+def _contenido_autorizado(asignacion_id, contenido_id, usuario_id):
+    """El contenido existe, es de un curso asignado a esta persona, y su avance."""
+    fila = consultar(
+        "SELECT co.*, m.curso_id, v.max_posicion, v.completo FROM contenidos co"
+        " JOIN modulos m ON m.id = co.modulo_id"
+        " JOIN asignaciones a ON a.curso_id = m.curso_id"
+        " LEFT JOIN avance_contenidos v ON v.asignacion_id = a.id AND v.contenido_id = co.id"
+        " WHERE co.id = ? AND a.id = ? AND a.usuario_id = ?",
+        (contenido_id, asignacion_id, usuario_id), uno=True)
+    if fila is None:
+        abort(404)
+    # El orden de los módulos también se exige aquí, no solo en la página: si
+    # no, bastaría pedir el video o la página de un módulo todavía cerrado por
+    # su URL. Queda abierto si no hay ningún módulo anterior sin aprobar.
+    pendiente = consultar(
+        "SELECT 1 FROM modulos m"
+        " LEFT JOIN avance_modulos v ON v.modulo_id = m.id AND v.asignacion_id = ?"
+        " WHERE m.curso_id = ?"
+        "   AND (m.orden, m.id) < (SELECT mm.orden, mm.id FROM modulos mm WHERE mm.id = ?)"
+        "   AND COALESCE(v.estado, 'pendiente') <> 'aprobado' LIMIT 1",
+        (asignacion_id, fila["curso_id"], fila["modulo_id"]), uno=True)
+    if pendiente:
+        abort(403)
+    return fila
+
+
+@bp.route("/material/<int:asignacion_id>/<int:contenido_id>/video")
+@login_requerido
+def video(asignacion_id, contenido_id):
+    fila = _contenido_autorizado(asignacion_id, contenido_id, usuario_actual()["id"])
+    if fila["tipo_material"] != "video":
+        abort(404)
+    ruta = media.ruta_video(fila)
+    if not ruta.exists():
+        abort(404)
+    respuesta = send_file(ruta, conditional=True, max_age=0)
+    respuesta.headers["Content-Disposition"] = "inline"
+    return respuesta
+
+
+@bp.route("/material/<int:asignacion_id>/<int:contenido_id>/page/<int:numero>.png")
+@login_requerido
+def pagina(asignacion_id, contenido_id, numero):
+    fila = _contenido_autorizado(asignacion_id, contenido_id, usuario_actual()["id"])
+    if fila["tipo_material"] != "documento":
+        abort(404)
+    if numero < 1 or numero > fila["paginas"]:
+        abort(404)
+    # No se puede saltar adelante: solo la página siguiente a la más lejana.
+    if numero > (fila["max_posicion"] or 0) + 1 and not fila["completo"]:
+        abort(403)
+    ruta = media.ruta_pagina(fila, numero)
+    if not ruta.exists():
+        abort(404)
+    tipo = "image/webp" if ruta.suffix == ".webp" else "image/png"
+    # La página ya no cambia: dejar que el navegador la guarde un día ahorra
+    # tráfico y peticiones al repasar el material.
+    respuesta = send_file(ruta, mimetype=tipo, max_age=86400)
+    respuesta.headers["Cache-Control"] = "private, max-age=86400"
+    return respuesta
+
+
+@bp.route("/api/authorize")
+def autorizar_medio():
+    """Caddy pregunta aquí antes de entregar un archivo de material.
+
+    Responde 204 si la persona puede verlo y 403 si no. La comprobación es
+    instantánea, así que el proceso queda libre de inmediato: la entrega del
+    archivo, que es lo lento, la hace Caddy.
+    """
+    usuario = usuario_actual()
+    if usuario is None:
+        return "", 401
+
+    ruta = (request.headers.get("X-Forwarded-Uri") or request.args.get("uri") or "")
+    partes = [p for p in ruta.split("?")[0].strip("/").split("/") if p]
+    # La ruta puede llegar como /media/materiales/<carpeta>/<archivo> o ya sin el
+    # prefijo, según el orden en que Caddy aplique strip_prefix, y en algunos
+    # montajes como URL completa. Se busca "materiales" donde esté en vez de
+    # exigir una posición fija: así las tres formas funcionan.
+    if "materiales" not in partes:
+        print(f"[authorize] no reconozco esta ruta: {ruta!r}", flush=True)
+        return "", 403
+    indice = partes.index("materiales")
+    if len(partes) < indice + 2:
+        return "", 403
+    carpeta = partes[indice + 1]
+
+    if usuario["rol"] in ("admin", "instructor"):
+        permitido = consultar("SELECT 1 AS ok FROM contenidos WHERE carpeta = ? LIMIT 1",
+                              (carpeta,), uno=True)
+    else:
+        # Además de estar asignado, el módulo tiene que estar abierto: el curso
+        # es secuencial. Sin esta parte, en producción —donde los videos los
+        # entrega Caddy y pasa por aquí— se podría bajar el material de un
+        # módulo todavía cerrado conociendo el nombre de su carpeta.
+        permitido = consultar(
+            "SELECT 1 AS ok FROM contenidos co JOIN modulos m ON m.id = co.modulo_id"
+            " JOIN asignaciones a ON a.curso_id = m.curso_id"
+            " JOIN cursos c ON c.id = m.curso_id"
+            " WHERE co.carpeta = ? AND a.usuario_id = ? AND c.activo = 1"
+            "   AND NOT EXISTS ("
+            "     SELECT 1 FROM modulos previo"
+            "     LEFT JOIN avance_modulos v ON v.modulo_id = previo.id"
+            "       AND v.asignacion_id = a.id"
+            "     WHERE previo.curso_id = m.curso_id"
+            "       AND (previo.orden, previo.id) < (m.orden, m.id)"
+            "       AND COALESCE(v.estado, 'pendiente') <> 'aprobado')"
+            " LIMIT 1",
+            (carpeta, usuario["id"]), uno=True)
+    return ("", 204) if permitido else ("", 403)
+
+
+@bp.post("/api/progress/<int:asignacion_id>/<int:contenido_id>")
+@login_requerido
+def avance(asignacion_id, contenido_id):
+    usuario = usuario_actual()
+    fila = _contenido_autorizado(asignacion_id, contenido_id, usuario["id"])
+    datos = request.get_json(silent=True) or {}
+    maximo = float(fila["max_posicion"] or 0)
+    completo = bool(fila["completo"])
+
+    if fila["tipo_material"] == "video":
+        total = float(fila["duracion_segundos"] or 0)
+        posicion = float(datos.get("posicion") or 0)
+        if total <= 0:
+            return jsonify(error="This material has no recorded duration."), 400
+        if posicion > maximo + config.SALTO_MAX_SEGUNDOS:
+            return jsonify(avance=round(100 * maximo / total, 2), max_posicion=maximo,
+                           habilitado=completo,
+                           mensaje="The video must be watched in order; skipping is not recorded."), 200
+        maximo = min(max(maximo, posicion), total)
+        porcentaje = min(100.0, 100 * maximo / total)
+        completo = completo or porcentaje >= config.PORCENTAJE_MIN_VIDEO
+        # Un video cuenta como visto al 95%: si ya está dado por visto, el avance
+        # es 100. Si no, el curso se quedaría en 99% para siempre con todo hecho.
+        if completo:
+            porcentaje = 100.0
+    else:
+        total_paginas = int(fila["paginas"] or 0)
+        pagina_actual = int(datos.get("pagina") or 0)
+        if total_paginas <= 0:
+            return jsonify(error="This material has no recorded pages."), 400
+        if pagina_actual > maximo + 1:
+            return jsonify(mensaje="Move through the pages one at a time."), 200
+        clave = f"pag_{asignacion_id}_{contenido_id}"
+        if pagina_actual > maximo:
+            if time.time() - session.get(clave, 0) < config.SEGUNDOS_MIN_POR_PAGINA - 1:
+                return jsonify(avance=round(100 * maximo / total_paginas, 2),
+                               max_posicion=maximo, habilitado=completo,
+                               mensaje="Take a few seconds to read this page."), 200
+            session[clave] = time.time()
+        maximo = min(max(maximo, pagina_actual), total_paginas)
+        porcentaje = min(100.0, 100 * maximo / total_paginas)
+        completo = completo or maximo >= total_paginas
+
+    # La primera vez que alguien avanza en este curso, queda en la bitácora.
+    previa = consultar("SELECT estado FROM asignaciones WHERE id = ?",
+                       (asignacion_id,), uno=True)
+    if previa and previa["estado"] == "pendiente":
+        titulo_curso = consultar("SELECT titulo FROM cursos WHERE id = ?",
+                                 (fila["curso_id"],), uno=True)
+        registrar("curso.iniciar", titulo_curso["titulo"] if titulo_curso else None,
+                  fila["curso_id"])
+
+    ejecutar("UPDATE avance_contenidos SET max_posicion = ?, avance = ?, completo = ?,"
+             " completado_en = CASE WHEN ? AND completado_en IS NULL THEN ? ELSE completado_en END"
+             " WHERE asignacion_id = ? AND contenido_id = ?",
+             (maximo, round(porcentaje, 2), int(completo), int(completo), ahora(),
+              asignacion_id, contenido_id))
+
+    # El avance del módulo se recalcula a partir de todos sus materiales.
+    if completo and not fila["completo"]:
+        registrar("material.terminar", fila["titulo"] or fila["archivo_original"],
+                  contenido_id, "Video" if fila["tipo_material"] == "video"
+                  else f"{fila['paginas']} pages")
+    contenidos = contenidos_con_avance(asignacion_id, fila["modulo_id"])
+    modulo_avance = _sincronizar_modulo(asignacion_id, fila["modulo_id"], contenidos)
+
+    # Si el curso no tiene exámenes, terminar el material es terminar el curso:
+    # el certificado se emite aquí, porque no habrá ninguna calificación después.
+    if recalcular_curso(asignacion_id, fila["curso_id"]):
+        asignacion = consultar("SELECT * FROM asignaciones WHERE id = ?",
+                               (asignacion_id,), uno=True)
+        try:
+            emitir_certificado(asignacion, 100)
+        except Exception as error:                 # nunca romper el visor por esto
+            print(f"[certificado] no se pudo emitir al terminar el material: {error}",
+                  flush=True)
+    return jsonify(avance=round(porcentaje, 2), max_posicion=maximo, habilitado=completo,
+                   modulo_completo=bool(modulo_avance["material_completo"]),
+                   modulo_avance=modulo_avance["avance"])
+
+
+# --------------------------------------------------------------------------- exam
+@bp.route("/course/<int:asignacion_id>/module/<int:modulo_id>/exam", methods=["GET", "POST"])
+@login_requerido
+def examen(asignacion_id, modulo_id):
+    usuario = usuario_actual()
+    asignacion = _asignacion(asignacion_id, usuario["id"])
+    bloque = next((m for m in modulos_con_avance(asignacion_id, asignacion["curso_id"])
+                   if m["m"]["id"] == modulo_id), None)
+    if bloque is None:
+        abort(404)
+
+    if not _modulo_abierto(bloque):
+        return redirect(url_for("estudiante.curso", asignacion_id=asignacion_id))
+
+    quiz_id = bloque["m"]["quiz_id"]
+    if not quiz_id:
+        flash("This module has no exam configured yet.", "error")
+        return redirect(url_for("estudiante.modulo", asignacion_id=asignacion_id, modulo_id=modulo_id))
+    if not bloque["avance"]["material_completo"]:
+        flash("Finish the module content before taking the exam.", "error")
+        return redirect(url_for("estudiante.modulo", asignacion_id=asignacion_id, modulo_id=modulo_id))
+    if bloque["aprobado"]:
+        flash("You already passed this module.", "ok")
+        return redirect(url_for("estudiante.modulo", asignacion_id=asignacion_id, modulo_id=modulo_id))
+
+    usados = len(bloque["intentos"])
+    if usados >= bloque["m"]["intentos_max"]:
+        flash("You have used all attempts. Ask the administrator to reopen this training.", "error")
+        return redirect(url_for("estudiante.modulo", asignacion_id=asignacion_id, modulo_id=modulo_id))
+
+    banco = consultar("SELECT * FROM preguntas WHERE quiz_id = ? ORDER BY orden, id", (quiz_id,))
+    if not banco:
+        flash("This exam has no questions loaded yet.", "error")
+        return redirect(url_for("estudiante.modulo", asignacion_id=asignacion_id, modulo_id=modulo_id))
+
+    if request.method == "POST":
+        return _calificar(asignacion, bloque, usados)
+
+    # Selección aleatoria del banco y mezcla de opciones
+    limite = bloque["m"]["preguntas_por_intento"] or 0
+    seleccion = list(banco)
+    if bloque["m"]["mezclar"]:
+        random.shuffle(seleccion)
+    if 0 < limite < len(seleccion):
+        seleccion = seleccion[:limite]
+
+    preguntas = []
+    for pregunta in seleccion:
+        opciones = consultar(
+            "SELECT id, texto FROM opciones WHERE pregunta_id = ? ORDER BY orden, id",
+            (pregunta["id"],))
+        opciones = list(opciones)
+        if bloque["m"]["mezclar"]:
+            random.shuffle(opciones)
+        preguntas.append({"id": pregunta["id"], "enunciado": pregunta["enunciado"],
+                          "opciones": opciones})
+
+    return render_template("estudiante/examen.html", a=asignacion, bloque=bloque,
+                           preguntas=preguntas, intento_numero=usados + 1,
+                           ids=",".join(str(p["id"]) for p in preguntas))
+
+
+def _calificar(asignacion, bloque, usados):
+    quiz_id = bloque["m"]["quiz_id"]
+    modulo_id = bloque["m"]["id"]
+    ids = [int(x) for x in (request.form.get("ids") or "").split(",") if x.strip().isdigit()]
+    validas = {p["id"] for p in consultar(
+        "SELECT id FROM preguntas WHERE quiz_id = ?", (quiz_id,))}
+    ids = [i for i in ids if i in validas]
+    if not ids:
+        flash("The exam session expired. Please start it again.", "error")
+        return redirect(url_for("estudiante.examen", asignacion_id=asignacion["id"],
+                                modulo_id=modulo_id))
+
+    respuestas, aciertos = {}, 0
+    for pregunta_id in ids:
+        correcta = consultar("SELECT id FROM opciones WHERE pregunta_id = ? AND correcta = 1",
+                             (pregunta_id,), uno=True)
+        elegida = request.form.get(f"p{pregunta_id}")
+        elegida = int(elegida) if (elegida or "").isdigit() else None
+        respuestas[str(pregunta_id)] = elegida
+        if correcta and elegida == correcta["id"]:
+            aciertos += 1
+
+    puntaje = round(100 * aciertos / len(ids), 2)
+    aprobado = puntaje >= bloque["m"]["puntaje_minimo"]
+
+    ejecutar("INSERT INTO intentos (asignacion_id, modulo_id, quiz_id, usuario_id, puntaje,"
+             " aprobado, respuestas, finalizado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (asignacion["id"], modulo_id, quiz_id, asignacion["usuario_id"], puntaje,
+              int(aprobado), json.dumps(respuestas), ahora()))
+    registrar("examen.presentar", bloque["m"]["quiz_titulo"] or bloque["m"]["titulo"], quiz_id,
+              f"{asignacion['titulo']} · {puntaje:.0f}/100 · "
+              f"{'passed' if aprobado else 'not passed'} · attempt {usados + 1}")
+    ejecutar("UPDATE avance_modulos SET estado = ?, completado_en = ? WHERE asignacion_id = ?"
+             " AND modulo_id = ?",
+             ("aprobado" if aprobado else "reprobado", ahora() if aprobado else None,
+              asignacion["id"], modulo_id))
+
+    curso_listo = recalcular_curso(asignacion["id"], asignacion["curso_id"])
+    codigo = emitir_certificado(asignacion, puntaje) if curso_listo else None
+    certificado = consultar("SELECT codigo FROM certificados WHERE usuario_id = ? AND"
+                            " curso_id = ? AND anulado_en IS NULL ORDER BY id DESC",
+                            (asignacion["usuario_id"], asignacion["curso_id"]), uno=True)
+
+    return render_template("estudiante/resultado.html", a=asignacion, bloque=bloque,
+                           puntaje=puntaje, aprobado=aprobado, aciertos=aciertos,
+                           total=len(ids), codigo=codigo or (certificado["codigo"] if certificado else None),
+                           curso_listo=curso_listo,
+                           intentos_restantes=bloque["m"]["intentos_max"] - usados - 1)
+
+
+def emitir_certificado(asignacion, puntaje) -> str:
+    """Nota final del curso = promedio de los mejores intentos de cada módulo."""
+    usuario = consultar("SELECT * FROM usuarios WHERE id = ?", (asignacion["usuario_id"],), uno=True)
+    curso_ = consultar("SELECT * FROM cursos WHERE id = ?", (asignacion["curso_id"],), uno=True)
+    ajustes = obtener_config()
+
+    notas = consultar(
+        "SELECT MAX(puntaje) AS mejor FROM intentos WHERE asignacion_id = ?"
+        " GROUP BY modulo_id", (asignacion["id"],))
+    final = round(sum(n["mejor"] for n in notas) / len(notas), 2) if notas else puntaje
+
+    # Solo se reutiliza un certificado vigente. Si el anterior fue anulado por
+    # un reinicio, ese queda como estaba y este curso emite uno nuevo.
+    existente = consultar("SELECT * FROM certificados WHERE usuario_id = ? AND curso_id = ?"
+                          " AND anulado_en IS NULL ORDER BY id DESC",
+                          (usuario["id"], curso_["id"]), uno=True)
+    codigo = existente["codigo"] if existente else cert.nuevo_codigo()
+    # La fecha del certificado es la de ejecución del curso, no la de generación del PDF.
+    completado = consultar("SELECT completado_en FROM asignaciones WHERE id = ?",
+                           (asignacion["id"],), uno=True)["completado_en"]
+    ruta = cert.generar(usuario, curso_, final, codigo, ajustes, completado_en=completado)
+
+    if existente:
+        ejecutar("UPDATE certificados SET puntaje = ?, archivo = ?, emitido_en = ?,"
+                 " origen = 'plataforma' WHERE id = ?",
+                 (final, ruta.name, ahora(), existente["id"]))
+    else:
+        ejecutar("INSERT INTO certificados (codigo, usuario_id, curso_id, intento_id, puntaje,"
+                 " archivo, origen, emitido_en) VALUES (?, ?, ?, NULL, ?, ?, 'plataforma', ?)",
+                 (codigo, usuario["id"], curso_["id"], final, ruta.name, ahora()))
+
+    registrar("curso.terminar", curso_["titulo"], curso_["id"],
+              f"Final score {final:.0f}/100 · certificate {codigo}")
+
+    asunto = f"Certificate of Training · {curso_['titulo']}"
+    mailer.enviar(ajustes, usuario["email"], asunto,
+                  mailer.cuerpo_certificado(usuario, curso_, final, codigo, ajustes), ruta)
+    if ajustes.get("admin_email"):
+        mailer.enviar(ajustes, ajustes["admin_email"], f"[Copy] {asunto}",
+                      mailer.cuerpo_certificado(usuario, curso_, final, codigo, ajustes,
+                                                para_admin=True), ruta)
+    return codigo
+
+
+@bp.post("/course/<int:asignacion_id>/feedback")
+@login_requerido
+def encuesta(asignacion_id):
+    """Encuesta de satisfacción: estrellas y comentario. Se responde una vez."""
+    usuario = usuario_actual()
+    asignacion = _asignacion(asignacion_id, usuario["id"])
+    if asignacion["estado"] != "aprobado":
+        flash("You can rate the course once you have completed it.", "error")
+        return redirect(url_for("estudiante.curso", asignacion_id=asignacion_id))
+
+    try:
+        estrellas = int(request.form.get("estrellas") or 0)
+    except ValueError:
+        estrellas = 0
+    if not 1 <= estrellas <= 5:
+        flash("Choose between one and five stars.", "error")
+        return redirect(url_for("estudiante.curso", asignacion_id=asignacion_id))
+
+    comentario = (request.form.get("comentario") or "").strip()[:2000]
+    ejecutar("INSERT OR REPLACE INTO encuestas (asignacion_id, usuario_id, curso_id,"
+             " estrellas, comentario, creado_en) VALUES (?, ?, ?, ?, ?, ?)",
+             (asignacion_id, usuario["id"], asignacion["curso_id"], estrellas,
+              comentario or None, ahora()))
+    registrar("encuesta.enviar", asignacion["titulo"], asignacion["curso_id"],
+              f"{estrellas}/5" + (f" · “{comentario[:120]}”" if comentario else ""))
+    _avisar_encuesta(asignacion, usuario, estrellas, comentario)
+    flash("Thank you. Your feedback was sent to the instructor.", "ok")
+    return redirect(url_for("estudiante.curso", asignacion_id=asignacion_id))
+
+
+def _avisar_encuesta(asignacion, usuario, estrellas, comentario):
+    """Le avisa al instructor del curso, y al administrador."""
+    ajustes = obtener_config()
+    curso = consultar("SELECT * FROM cursos WHERE id = ?", (asignacion["curso_id"],), uno=True)
+    destinos = []
+    for fila in consultar(
+            "SELECT u.email FROM usuarios u WHERE u.id = ? AND u.activo = 1"
+            " UNION SELECT u.email FROM curso_instructores ci"
+            "   JOIN usuarios u ON u.id = ci.usuario_id"
+            "   WHERE ci.curso_id = ? AND u.activo = 1",
+            (curso["creado_por"], curso["id"])):
+        destinos.append(fila["email"])
+    if ajustes.get("admin_email"):
+        destinos.append(ajustes["admin_email"])
+    if not destinos:
+        return
+    cuerpo = (f"{usuario['nombre']} rated the course \u201c{curso['titulo']}\u201d "
+              f"{estrellas} out of 5.\n\n"
+              + (f"Their comment:\n\n{comentario}\n\n" if comentario else "No comment left.\n\n")
+              + f"See all feedback: {mailer.enlace(ajustes, '/admin/courses')}\n")
+    mailer.enviar(ajustes, sorted(set(destinos)),
+                  f"Course feedback · {curso['titulo']} · {estrellas}/5", cuerpo)
+
+
+@bp.route("/certificate/<codigo>.pdf")
+@login_requerido
+def descargar_certificado(codigo):
+    usuario = usuario_actual()
+    certificado = consultar("SELECT * FROM certificados WHERE codigo = ?", (codigo,), uno=True)
+    if certificado is None:
+        abort(404)
+    if usuario["rol"] != "admin" and certificado["usuario_id"] != usuario["id"]:
+        abort(403)
+    # Anulado: ni con el enlace guardado. Si no, bastaría tener el URL viejo.
+    if certificado["anulado_en"] and usuario["rol"] != "admin":
+        abort(410)
+    ruta = config.CERT_DIR / certificado["archivo"]
+    if not ruta.exists():
+        if certificado["origen"] == "importado":
+            abort(404)
+        datos_usuario = consultar("SELECT * FROM usuarios WHERE id = ?",
+                                  (certificado["usuario_id"],), uno=True)
+        curso_ = consultar("SELECT * FROM cursos WHERE id = ?", (certificado["curso_id"],), uno=True)
+        ruta = cert.generar(datos_usuario, curso_, certificado["puntaje"],
+                            certificado["codigo"], obtener_config(),
+                            completado_en=certificado["emitido_en"])
+    return send_file(ruta, mimetype="application/pdf", as_attachment=True,
+                     download_name=f"{codigo}.pdf")
+
+
+# --------------------------------------------------------------------------- account
+@bp.route("/account")
+@login_requerido
+def cuenta():
+    usuario = usuario_actual()
+    certificados_usuario = consultar(
+        "SELECT ce.*, c.titulo FROM certificados ce JOIN cursos c ON c.id = ce.curso_id"
+        " WHERE ce.usuario_id = ? AND ce.anulado_en IS NULL"
+        " ORDER BY ce.emitido_en DESC", (usuario["id"],))
+    return render_template("estudiante/cuenta.html", certificados=certificados_usuario)
