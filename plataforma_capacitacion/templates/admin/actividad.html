@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Activity log{% endblock %}
+
+{% block content %}
+<header>
+  <h1>Activity log</h1>
+  <p>What has been done in the platform, newest first.
+     <strong>All times are UTC</strong> and labelled as such, so a record never depends on who is
+     reading it or from where.</p>
+</header>
+
+<div class="card">
+  <form method="get" class="fields">
+    <div><label for="q">Search</label>
+      <input id="q" name="q" type="search" value="{{ q }}" placeholder="Course, person, action…"></div>
+    <div><label for="desde">From (UTC)</label>
+      <input id="desde" name="desde" type="date" value="{{ desde }}"></div>
+    <div><label for="hasta">To (UTC)</label>
+      <input id="hasta" name="hasta" type="date" value="{{ hasta }}"></div>
+    <div><label for="tipo">Activity</label>
+      <select id="tipo" name="tipo">
+        <option value="" {{ 'selected' if not tipo }}>Everything</option>
+        <option value="learners" {{ 'selected' if tipo == 'learners' }}>Learners: courses and exams</option>
+        <option value="disen" {{ 'selected' if tipo == 'disen' }}>Course design</option>
+        <option value="gestion" {{ 'selected' if tipo == 'gestion' }}>Users and assignments</option>
+        <option value="sesion" {{ 'selected' if tipo == 'sesion' }}>Sign-ins</option>
+      </select></div>
+    <div><label for="usuario">Done by</label>
+      <select id="usuario" name="usuario">
+        <option value="">Anyone</option>
+        {% for p in personas %}
+          <option value="{{ p.id }}" {{ 'selected' if usuario == p.id | string }}>{{ p.nombre }}</option>
+        {% endfor %}
+      </select></div>
+    <div class="row">
+      <button class="btn" type="submit">Filter</button>
+      <a class="btn secondary" href="{{ url_for('admin.actividad') }}">Clear</a>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:16px">
+    <div>
+      <h2 style="margin:0">{{ total }} entr{{ 'y' if total == 1 else 'ies' }}{% if desde or hasta %}
+        <span class="tag neutral">{{ desde or 'start' }} → {{ hasta or 'today' }} UTC</span>{% endif %}</h2>
+      {% if total > mostradas %}
+        <p class="hint" style="margin:6px 0 0">Showing the {{ mostradas }} most recent. Download
+           the CSV for all {{ total }} — it uses the filters above, with no limit.</p>
+      {% elif total %}
+        <p class="hint" style="margin:6px 0 0">All {{ total }} shown.</p>
+      {% endif %}
+    </div>
+    {% if total %}
+      {# request.args para que la descarga lleve exactamente el filtro de la pantalla. #}
+      <a class="btn secondary" href="{{ url_for('admin.exportar_actividad', **request.args) }}">
+        Download CSV</a>
+    {% endif %}
+  </div>
+
+  {% if dias %}
+    {% for dia, filas in dias %}
+      <div class="timeline-dia">
+        <h3>{% if dia == hoy %}Today{% else %}{{ dia }}{% endif %} <span class="hint">UTC</span></h3>
+        <ul class="timeline">
+          {% for f in filas %}
+            <li>
+              {# Directo de lo guardado, sin convertir: la marca ya es UTC. #}
+              <span class="tl-hora">{{ f.creado_en[11:16] }} <span class="tl-utc">UTC</span></span>
+              <span class="tl-texto">
+                <strong>{{ f.usuario_nombre or 'System' }}</strong>
+                {{ frases.get(f.accion, f.accion) }}
+                {% if f.objeto %}<em>{{ f.objeto }}</em>{% endif %}
+                {% if f.detalle %}<span class="tl-detalle">{{ f.detalle }}</span>{% endif %}
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">{{ 'Nothing matches those filters.' if q or usuario or tipo or desde or hasta
+                        else 'Nothing recorded yet.' }}</p>
+  {% endif %}
+</div>
+{% endblock %}
