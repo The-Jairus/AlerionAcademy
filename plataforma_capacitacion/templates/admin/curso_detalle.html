@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+{% import "admin/_curso_campos.html" as campos %}
+{% block title %}{{ curso.titulo }}{% endblock %}
+
+{% block content %}
+<header>
+  <p><a href="{{ url_for('admin.cursos') }}">← Courses</a></p>
+  <div class="row" style="justify-content:space-between;align-items:flex-start;gap:12px">
+    <h1 style="margin:0">{{ curso.titulo }}</h1>
+    <a class="btn gold" href="{{ url_for('admin.previsualizar_curso', curso_id=curso.id, volver=request.full_path) }}">
+      Preview as a learner</a>
+  </div>
+  <p class="hint">{{ curso.categoria or 'No category' }} · {{ curso.horas | round(1) }} h ·
+     {% if curso.one_time %}one-time course, no expiry
+     {% else %}certificate valid for {{ curso.vigencia_meses }} months{% endif %} ·
+     {{ 'signed certificate' if curso.cert_tipo == 'signed' else 'unsigned certificate' }}</p>
+  {% if curso.actualizado_en %}
+    <p class="hint">Last updated {{ curso.actualizado_en | fecha_hora }}{% if curso.actualizado_nombre %}
+      by {{ curso.actualizado_nombre }}{% endif %}.</p>
+  {% endif %}
+</header>
+
+<div class="card">
+  <h2>{{ modulos | length }} module{{ 's' if modulos | length != 1 }}</h2>
+  <p class="pista">Modules run in the order shown here, and each exam travels with its module.
+     A module can hold several items of material — a presentation and a video, say — and the
+     learner has to go through all of them, in order, before the exam unlocks. A module does not
+     need an exam: without one, going through its material completes it.</p>
+  {% if modulos %}
+    {% for m in modulos %}
+      {% set partes = contenidos.get(m.id, []) %}
+      <div class="modulo {{ 'pendiente' if (m.quiz_id and not m.preguntas) or not partes else 'aprobado' }}">
+        <div class="numero">{{ loop.index }}</div>
+        <div class="cuerpo">
+          <div class="row" style="justify-content:space-between;align-items:flex-start">
+            <h3>{{ m.titulo }}</h3>
+            <div class="row">
+              <form method="post" class="inline" action="{{ url_for('admin.mover_modulo', modulo_id=m.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="direccion" value="up">
+                <button class="btn small secondary" type="submit" title="Move module and its exam up"
+                        aria-label="Move module up" {{ 'disabled' if loop.first }}>↑</button>
+              </form>
+              <form method="post" class="inline" action="{{ url_for('admin.mover_modulo', modulo_id=m.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="direccion" value="down">
+                <button class="btn small secondary" type="submit" title="Move module and its exam down"
+                        aria-label="Move module down" {{ 'disabled' if loop.last }}>↓</button>
+              </form>
+            </div>
+          </div>
+          {% if m.descripcion %}<p class="hint" style="margin:0 0 6px">{{ m.descripcion }}</p>{% endif %}
+
+          {# ---------------------------------------------------- materiales #}
+          {% if partes %}
+            <ol class="materiales">
+              {% for co in partes %}
+                <li>
+                  <span class="mat-nombre">{{ co.titulo or co.archivo_original }}</span>
+                  <span class="mat-dato">
+                    {{ 'Video' if co.tipo_material == 'video' else 'Document' }}
+                    · {{ co.duracion_segundos | duracion if co.tipo_material == 'video' else co.paginas ~ ' pages' }}
+                  </span>
+                  <span class="mat-acciones">
+                    <form method="post" class="inline" action="{{ url_for('admin.mover_contenido', contenido_id=co.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="direccion" value="up">
+                      <button class="btn small secondary" type="submit" title="Move material up"
+                              aria-label="Move material up" {{ 'disabled' if loop.first }}>↑</button>
+                    </form>
+                    <form method="post" class="inline" action="{{ url_for('admin.mover_contenido', contenido_id=co.id) }}">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                      <input type="hidden" name="direccion" value="down">
+                      <button class="btn small secondary" type="submit" title="Move material down"
+                              aria-label="Move material down" {{ 'disabled' if loop.last }}>↓</button>
+                    </form>
+                    <details class="menu">
+                      <summary class="btn small secondary">Options ▾</summary>
+                      <div class="menu-lista">
+                        <button class="btn small secondary" type="button"
+                                onclick="document.getElementById('mat-{{ co.id }}').toggleAttribute('hidden')">Rename</button>
+                        <button class="btn small secondary" type="button"
+                                onclick="document.getElementById('swap-{{ co.id }}').toggleAttribute('hidden')">Replace file</button>
+                        {% if partes | length > 1 %}
+                          <hr>
+                          <form method="post" action="{{ url_for('admin.eliminar_contenido', contenido_id=co.id) }}"
+                                onsubmit="return confirm('Remove this material from the module?')">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button class="btn small danger" type="submit">Remove</button>
+                          </form>
+                        {% endif %}
+                      </div>
+                    </details>
+                  </span>
+                  <form id="mat-{{ co.id }}" hidden method="post" class="mat-rename"
+                        action="{{ url_for('admin.renombrar_contenido', contenido_id=co.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="titulo" value="{{ co.titulo or '' }}"
+                           placeholder="A name learners will see, e.g. Part 1 — Slides">
+                    <button class="btn small" type="submit">Save name</button>
+                  </form>
+                  <form id="swap-{{ co.id }}" hidden method="post" class="mat-rename form-material"
+                        enctype="multipart/form-data"
+                        action="{{ url_for('admin.reemplazar_contenido', contenido_id=co.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="file" name="material" required accept="{{ extensiones | join(',') }}">
+                    <button class="btn small" type="submit">Replace file</button>
+                    <span class="pista" style="flex-basis:100%">Replaces
+                      <strong>{{ co.archivo_original }}</strong> and keeps its position and name.
+                      Anyone who had already gone through it will have to review the new version.</span>
+                  </form>
+                </li>
+              {% endfor %}
+            </ol>
+          {% else %}
+            <p class="hint" style="color:var(--pending-ink)">This module has no material yet.</p>
+          {% endif %}
+
+          <div class="acciones row">
+            {% if not m.quiz_id %}
+              <span class="tag neutral">No exam</span>
+            {% elif m.preguntas %}
+              <span class="tag aprobado">{{ m.quiz_titulo }} · {{ m.preguntas }} question{{ 's' if m.preguntas != 1 }}</span>
+              {% if m.preguntas_por_intento %}
+                <span class="tag neutral">{{ m.preguntas_por_intento }} per attempt</span>
+              {% endif %}
+              {% if m.comparten > 1 %}
+                <span class="tag gold">Shared with {{ m.comparten - 1 }} other module{{ 's' if m.comparten != 2 }}</span>
+              {% endif %}
+            {% else %}
+              <span class="tag pendiente">{{ m.quiz_titulo }} · no questions yet</span>
+            {% endif %}
+            {% if m.quiz_id %}
+              <a class="btn small" href="{{ url_for('admin.editar_quiz', quiz_id=m.quiz_id) }}">Edit exam</a>
+            {% endif %}
+            <button class="btn small secondary" type="button"
+                    onclick="document.getElementById('add-{{ m.id }}').toggleAttribute('hidden')">Add material</button>
+            <details class="menu">
+              <summary class="btn small secondary">Module options ▾</summary>
+              <div class="menu-lista">
+                <button class="btn small secondary" type="button"
+                        onclick="document.getElementById('mod-{{ m.id }}').toggleAttribute('hidden')">Edit module</button>
+                <hr>
+                <form method="post" action="{{ url_for('admin.eliminar_modulo', modulo_id=m.id) }}"
+                      onsubmit="return confirm('Delete this module, all of its material and its exam link?')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn small danger" type="submit">Delete module</button>
+                </form>
+              </div>
+            </details>
+          </div>
+
+          {# ---------------------------------------------- agregar material #}
+          <div id="add-{{ m.id }}" hidden style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+            <form method="post" enctype="multipart/form-data"
+                  action="{{ url_for('admin.agregar_contenido', modulo_id=m.id) }}"
+                  class="form-material">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="fields" style="margin:0">
+                <div><label for="ct-{{ m.id }}">Name (optional)</label>
+                  <input type="text" id="ct-{{ m.id }}" name="contenido_titulo"
+                         placeholder="e.g. Part 2 — Walkthrough video"></div>
+                <div class="full-width"><label for="cf-{{ m.id }}">File</label>
+                  <input type="file" id="cf-{{ m.id }}" name="material" required
+                         accept="{{ extensiones | join(',') }}"></div>
+                <div><button class="btn gold" type="submit">Add to this module</button></div>
+              </div>
+            </form>
+          </div>
+
+          {# ------------------------------------------------ editar módulo #}
+          <div id="mod-{{ m.id }}" hidden style="margin-top:12px;border-top:1px solid var(--line);padding-top:12px">
+            <form method="post" action="{{ url_for('admin.editar_modulo', modulo_id=m.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="fields" style="margin:0">
+                <div class="full-width"><label for="t-{{ m.id }}">Module title</label>
+                  <input type="text" id="t-{{ m.id }}" name="titulo" value="{{ m.titulo }}" required></div>
+                <div class="full-width"><label for="d-{{ m.id }}">Description</label>
+                  <textarea id="d-{{ m.id }}" name="descripcion">{{ m.descripcion or '' }}</textarea></div>
+                {{ campos.selector_examen(examenes, m, 'm' ~ m.id) }}
+                <div><button class="btn" type="submit">Save module</button></div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p class="empty">This course has no modules yet. Add the first one below.</p>
+  {% endif %}
+</div>
+
+<details class="card plegable">
+  <summary><h2>Add module</h2>
+    <span class="resumen">Title, first material file and the exam, if it has one</span></summary>
+  <div class="cuerpo">
+  <form method="post" action="{{ url_for('admin.agregar_modulo', curso_id=curso.id) }}"
+        enctype="multipart/form-data" id="module-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fields">
+      <div class="full-width"><label for="titulo">Module title</label>
+        <input type="text" id="titulo" name="titulo" required placeholder="e.g. Module 1 — Danger zones"></div>
+      <div class="full-width"><label for="descripcion">Description</label>
+        <textarea id="descripcion" name="descripcion"></textarea></div>
+      <div><label for="contenido_titulo">Material name (optional)</label>
+        <input type="text" id="contenido_titulo" name="contenido_titulo"
+               placeholder="e.g. Part 1 — Slides"></div>
+      <div class="full-width">
+        <label for="material">First material file</label>
+        <input id="material" name="material" type="file" required accept="{{ extensiones | join(',') }}">
+        <p class="hint" style="margin:6px 0 0">Accepted: {{ extensiones | join(', ') }}. PDFs and
+           presentations are shown page by page as images, so they cannot be edited or downloaded.
+           Videos are usable right away and are compressed in the background a few minutes later.
+           Once the module exists you can add more material to it.</p>
+      </div>
+      {{ campos.selector_examen(examenes, None, 'nuevo') }}
+      <div><button class="btn gold" type="submit" id="module-btn">Add module</button></div>
+    </div>
+  </form>
+  </div>
+</details>
+
+<details class="card plegable">
+  <summary><h2>Who can edit this course</h2>
+    <span class="resumen">{{ instructores | length }} instructor{{ 's' if instructores | length != 1 }}</span></summary>
+  <div class="cuerpo">
+  <p class="pista">The person who created the course can always edit it. Add other instructors
+     here and they will be able to edit and assign it too.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Name</th><th>Email</th><th>Role in this course</th><th></th></tr></thead>
+      <tbody>
+        {% for i in instructores %}
+          <tr>
+            <td>{{ i.nombre }}</td>
+            <td>{{ i.email }}</td>
+            <td>{% if i.es_dueno %}<span class="tag gold">Owner</span>
+                {% else %}<span class="tag neutral">Editor</span>{% endif %}</td>
+            <td>
+              {% if not i.es_dueno %}
+                <form method="post" class="inline" action="{{ url_for('admin.quitar_instructor', curso_id=curso.id, usuario_id=i.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn small danger" type="submit">Remove</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if candidatos %}
+    <form method="post" action="{{ url_for('admin.agregar_instructor', curso_id=curso.id) }}"
+          style="margin-top:14px">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="fields">
+        <div class="full-width"><label for="usuario_id">Add an instructor</label>
+          <select id="usuario_id" name="usuario_id">
+            {% for u in candidatos %}
+              <option value="{{ u.id }}">{{ u.nombre }} ({{ u.email }})</option>
+            {% endfor %}
+          </select></div>
+        <div><button class="btn" type="submit">Add</button></div>
+      </div>
+    </form>
+  {% else %}
+    <p class="hint" style="margin-top:12px">Everyone who could edit this course already can.</p>
+  {% endif %}
+  </div>
+</details>
+
+<details class="card plegable">
+  <summary><h2>Learner feedback</h2>
+    {% if resumen_encuesta and resumen_encuesta.n %}
+      <span class="estrellas-fijas">{% for i in range(1, 6) %}{{ '★' if i <= resumen_encuesta.promedio | round(0) | int else '☆' }}{% endfor %}</span>
+      <span class="resumen">
+        {{ resumen_encuesta.promedio | round(1) }} from {{ resumen_encuesta.n }} response{{ 's' if resumen_encuesta.n != 1 }}</span>
+    {% else %}
+      <span class="resumen">No responses yet</span>
+    {% endif %}
+  </summary>
+  <div class="cuerpo">
+  {% if opiniones %}
+    <ul class="opiniones">
+      {% for o in opiniones %}
+        <li>
+          <div class="op-cab">
+            <span class="estrellas-fijas">{% for i in range(1, 6) %}{{ '★' if i <= o.estrellas else '☆' }}{% endfor %}</span>
+            <strong>{{ o.usuario }}</strong>
+            <span class="op-fecha">{{ o.creado_en | fecha }}</span>
+          </div>
+          {% if o.comentario %}<p>{{ o.comentario }}</p>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="empty">No feedback yet. Learners are asked to rate the course once they complete it,
+       and every response is emailed to you.</p>
+  {% endif %}
+  </div>
+</details>
+
+<details class="card plegable">
+  <summary><h2>Course details and certificate</h2>
+    <span class="resumen">Title, hours, validity and how the certificate is signed</span></summary>
+  <div class="cuerpo">
+  <form method="post" enctype="multipart/form-data"
+        action="{{ url_for('admin.editar_curso', curso_id=curso.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="fields">
+      <div><label for="e_titulo">Title</label>
+        <input type="text" id="e_titulo" name="titulo" value="{{ curso.titulo }}"></div>
+      <div><label for="e_categoria">Category</label>
+        <input type="text" id="e_categoria" name="categoria" value="{{ curso.categoria or '' }}"></div>
+      <div><label for="e_horas">Hours</label>
+        <input type="number" id="e_horas" name="horas" step="0.5" min="0.5" value="{{ curso.horas }}"></div>
+      {{ campos.vigencia(curso, 'e') }}
+      <div class="full-width"><label for="e_descripcion">Description</label>
+        <textarea id="e_descripcion" name="descripcion">{{ curso.descripcion or '' }}</textarea></div>
+      {{ campos.certificado(curso, 'e') }}
+      <div><button class="btn" type="submit">Save</button></div>
+    </div>
+  </form>
+  </div>
+</details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Subir material tarda: se avisa para que nadie piense que se colgó.
+  function avisarProceso(formulario, boton) {
+    if (!formulario) return;
+    formulario.addEventListener('submit', function () {
+      boton.disabled = true;
+      boton.textContent = 'Processing material…';
+    });
+  }
+  avisarProceso(document.getElementById('module-form'), document.getElementById('module-btn'));
+  document.querySelectorAll('.form-material').forEach(function (f) {
+    avisarProceso(f, f.querySelector('button[type=submit]'));
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,29 @@
+# Despliegue en Render (https://render.com) sin administrar servidores.
+#
+#   1. Sube el proyecto a un repositorio de GitHub.
+#   2. En Render: New → Blueprint → selecciona el repositorio.
+#   3. Cuando el servicio esté arriba: Settings → Custom Domain → agrega tu dominio
+#      y crea en tu proveedor el registro CNAME que Render te indique.
+#      El certificado HTTPS lo emite Render automáticamente.
+#
+# Se usa Docker porque la conversión de .pptx necesita LibreOffice, que no viene
+# en el entorno estándar de Python.
+
+services:
+  - type: web
+    name: capacitacion
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter          # el plan gratuito no permite disco persistente
+    healthCheckPath: /ingreso
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: HTTPS
+        value: "1"
+      - key: DATA_DIR
+        value: /datos
+    disk:
+      name: datos
+      mountPath: /datos    # base de datos, material y certificados
+      sizeGB: 10
