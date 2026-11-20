@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Alerion Academy</title>
+  <link rel="icon" href="{{ url_for('static', filename='img/favicon.png') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') ~ '?v=' ~ version_css }}">
+</head>
+<body>
+<div class="signin">
+  <section class="panel">
+    <div>
+      <img class="signin-logo" src="{{ url_for('static', filename='img/logo.png') }}"
+           alt="Alerion Aviation" width="260"
+           style="width:260px;max-width:60%;height:auto;display:block">
+      <span class="kicker">Academy</span>
+      <h1>Training, documented to standard.</h1>
+      <div class="rule"></div>
+      <p>Every assignment is tracked end to end: what was covered, when it was completed and the certificate that proves it.</p>
+      <ul class="points">
+        <li>The exam unlocks only after the content is complete</li>
+        <li>Certificates are issued and emailed on the spot</li>
+        <li>Training records stay audit ready at all times</li>
+      </ul>
+    </div>
+    <p class="foot">{{ year }} · Alerion Aviation · Internal training platform</p>
+  </section>
+
+  <section class="form-side">
+    <div class="box">
+      <h2>Sign in to your account</h2>
+      <p style="color:var(--ink-soft);font-size:.9rem">Use the email address registered by the training department.</p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="alerts">
+            {% for category, text in messages %}
+              <div class="alert {{ category }}">{{ text }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form method="post" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="siguiente" value="{{ request.args.get('siguiente', '') }}">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" value="{{ email }}" autocomplete="username" required autofocus>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="btn gold" type="submit">Sign in</button>
+      </form>
+    </div>
+  </section>
+</div>
+</body>
+</html>

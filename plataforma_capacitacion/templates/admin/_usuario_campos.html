@@ -1,0 +1,47 @@
+{# Trozos que comparten el alta y la edición de una persona. Si estuvieran
+   duplicados, un día se cambiaría uno y no el otro. #}
+
+{% macro origen(sufijo, externo=false, proveedor='', proveedores=[]) %}
+  <div>
+    <label for="externo-{{ sufijo }}">Staff</label>
+    <label class="casilla recuadro" for="externo-{{ sufijo }}">
+      {# data-invertir: marcada ENCIENDE el bloque del proveedor (ver campos.js). #}
+      <input type="checkbox" id="externo-{{ sufijo }}" name="externo" value="1"
+             data-controla="proveedor-{{ sufijo }}" data-invertir="1"
+             {{ 'checked' if externo }}>
+      External — works for a provider
+    </label>
+  </div>
+  <div id="proveedor-{{ sufijo }}" data-ocultar="1" {{ '' if externo else 'hidden' }}>
+    <label for="prov-{{ sufijo }}">Provider</label>
+    <input type="text" id="prov-{{ sufijo }}" name="proveedor" value="{{ proveedor or '' }}"
+           list="proveedores-conocidos" placeholder="Company they work for">
+  </div>
+{% endmacro %}
+
+{% macro grupos_casillas(sufijo, grupos, elegidos=[]) %}
+  {% if grupos %}
+    <div class="full-width">
+      <label>Groups</label>
+      <div class="casillas-grupo">
+        {% for g in grupos %}
+          <label class="casilla recuadro" for="g-{{ sufijo }}-{{ g.id }}">
+            <input type="checkbox" id="g-{{ sufijo }}-{{ g.id }}" name="grupo_id"
+                   value="{{ g.id }}" {{ 'checked' if g.id in elegidos }}>
+            {{ g.nombre }}
+          </label>
+        {% endfor %}
+      </div>
+      <p class="pista">A person can be in several. Groups are only a shortcut for assigning
+         training; they grant nothing by themselves.</p>
+    </div>
+  {% endif %}
+{% endmacro %}
+
+{% macro lista_proveedores(proveedores) %}
+  {# Un datalist compartido: ofrece los proveedores que ya existen para que
+     nadie escriba "SkyTech" y "Sky Tech" y acaben siendo dos. #}
+  <datalist id="proveedores-conocidos">
+    {% for p in proveedores %}<option value="{{ p }}">{% endfor %}
+  </datalist>
+{% endmacro %}

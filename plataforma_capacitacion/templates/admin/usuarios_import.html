@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Import preview' if creados is none else 'Import result' }}{% endblock %}
+
+{% set hay_error = problemas | length > 0 %}
+
+{% block content %}
+<header>
+  <p class="volver"><a href="{{ url_for('admin.usuarios') }}">← Back to Users</a></p>
+  <h1>{% if creados is none %}Import preview{% else %}Import result{% endif %}</h1>
+  <p>{{ archivo }} · {{ revisadas | length }} row{{ 's' if revisadas | length != 1 }} read
+     {%- if columnas %} · columns found: {{ columnas | join(', ') }}{% endif %}</p>
+</header>
+
+{# El veredicto, en grande y antes que nada: es lo que se vino a ver. #}
+<div class="card resumen-import {{ 'con-error' if hay_error else 'limpio' }}">
+  {% if creados is none %}
+    <h2>Nothing has been created yet</h2>
+    <p>
+      {% if listos %}
+        <strong>{{ listos | length }}</strong> user{{ 's' if listos | length != 1 }} would be
+        created{{ ' as external staff' if externo else ' as internal staff' }}{%
+        if externo and proveedor %}, defaulting to {{ proveedor }}{% endif %}.
+      {% else %}
+        <strong>No row passed the checks</strong>, so there is nothing to create yet.
+      {% endif %}
+      {% if problemas %}
+        <strong>{{ problemas | length }}</strong> row{{ 's' if problemas | length != 1 }}
+        would be skipped — each one is marked below with what to fix.
+      {% else %}
+        No problems found in the file.
+      {% endif %}
+    </p>
+    <p class="hint">To create them, go back, <strong>untick “Dry run”</strong> and upload the
+       file again. Rows with a problem are skipped; the rest are still created, so you can also
+       fix the file first and come back.</p>
+  {% elif creados %}
+    <h2>{{ creados }} user{{ 's' if creados != 1 }} created</h2>
+    <p>
+      Created{{ ' as external staff' if externo else ' as internal staff' }}{%
+      if equipos %} and added to {{ equipos | map(attribute='nombre') | join(', ') }}{% endif %}.
+      {% if avisar %}{{ correos }} welcome email{{ 's' if correos != 1 }} sent.
+      {% else %}No welcome emails were sent.{% endif %}
+      {% if problemas %}{{ problemas | length }} row{{ 's' if problemas | length != 1 }} skipped.{% endif %}
+    </p>
+    {% if sin_clave and not avisar %}
+      <p class="hint"><strong>Careful:</strong> {{ sin_clave }} row{{ 's' if sin_clave != 1 }}
+         had no password, so a random one was generated. With no welcome email sent, nobody knows
+         it — those people need a password reset before they can sign in.</p>
+    {% endif %}
+  {% else %}
+    <h2>Nothing was created</h2>
+    <p>No row in the file passed the checks. Fix what is marked below and upload it again.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Row by row</h2>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Row</th><th>Name</th><th>Email</th><th>Job title</th><th>Role</th>
+          {% if externo %}<th>Provider</th>{% endif %}
+          <th>Password</th><th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in revisadas %}
+          <tr class="{{ 'pendiente' if r.estado == 'error' }}">
+            <td class="num">{{ r.n }}</td>
+            <td>{{ r.nombre or '—' }}</td>
+            <td>{{ r.email or '—' }}</td>
+            <td>{{ r.cargo or '—' }}</td>
+            <td>{{ r.rol if r.estado == 'ok' else (r.rol_bruto or 'learner') }}</td>
+            {% if externo %}<td>{{ r.proveedor or r.proveedor_bruto or '—' }}</td>{% endif %}
+            <td>
+              {% if r.estado != 'ok' %}—
+              {% elif r.generada %}<span class="hint">generated</span>
+              {% else %}<span class="hint">from the file</span>{% endif %}
+            </td>
+            <td>
+              {% if r.estado == 'ok' %}
+                {% if creados %}<span class="tag aprobado">Created</span>
+                {% elif creados is none %}<span class="tag aprobado">Will be created</span>
+                {% else %}<span class="tag neutral">Not created</span>{% endif %}
+              {% else %}
+                <span class="tag pendiente">Skipped</span>
+                <span class="sub-dato">{{ r.motivo }}</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <a class="btn" href="{{ url_for('admin.usuarios') }}">Back to Users</a>
+    <a class="btn secondary" href="{{ url_for('admin.plantilla_usuarios') }}">Download the template</a>
+  </div>
+</div>
+{% endblock %}
